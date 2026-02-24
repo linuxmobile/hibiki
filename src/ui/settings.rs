@@ -267,9 +267,19 @@ fn create_slider_section(
     // Normalize value for adjustment if needed, but here we assume caller passes raw value
     // For sliders like opacity (0-1) mapped to 0-100 scale:
     let (adj_val, adj_min, adj_max, adj_step) = match format_type {
-        SliderFormat::Percent => (initial_value * 100.0, min * 100.0, max * 100.0, step * 100.0),
+        SliderFormat::Percent => (
+            initial_value * 100.0,
+            min * 100.0,
+            max * 100.0,
+            step * 100.0,
+        ),
         SliderFormat::Multiplier => (initial_value, min, max, step),
-        SliderFormat::Pixels => (initial_value * 100.0, min * 100.0, max * 100.0, step * 100.0), // Use 0-100 scale for smoother slider
+        SliderFormat::Pixels => (
+            initial_value * 100.0,
+            min * 100.0,
+            max * 100.0,
+            step * 100.0,
+        ), // Use 0-100 scale for smoother slider
     };
 
     let adjustment = Adjustment::new(adj_val, adj_min, adj_max, adj_step, adj_step * 10.0, 0.0);
@@ -301,10 +311,7 @@ enum SliderFormat {
     Pixels,
 }
 
-fn create_theme_section(
-    current_theme: String,
-    config_service: &ConfigService,
-) -> GtkBox {
+fn create_theme_section(current_theme: String, config_service: &ConfigService) -> GtkBox {
     let theme_section = GtkBox::new(Orientation::Vertical, 12);
     let theme_label = Label::builder()
         .label("THEME MODE")
@@ -416,7 +423,11 @@ fn create_position_section(
         btn.connect_toggled(move |b| {
             if b.is_active() {
                 let mut cfg = service_c.get_config();
-                let current = if is_bubble { cfg.bubble.position } else { cfg.position };
+                let current = if is_bubble {
+                    cfg.bubble.position
+                } else {
+                    cfg.position
+                };
 
                 if current != pos {
                     if is_bubble {
@@ -477,7 +488,10 @@ fn create_keystroke_settings(
     left_col.set_width_request(250);
 
     // Theme Section
-    left_col.append(&create_theme_section(config.keystroke_theme.clone(), config_service));
+    left_col.append(&create_theme_section(
+        config.keystroke_theme.clone(),
+        config_service,
+    ));
 
     // Opacity Section
     let service_c = config_service.clone();
@@ -516,7 +530,11 @@ fn create_keystroke_settings(
     ));
 
     // Position Section
-    left_col.append(&create_position_section(config.position, config_service, false));
+    left_col.append(&create_position_section(
+        config.position,
+        config_service,
+        false,
+    ));
 
     grid.attach(&left_col, 0, 0, 1, 1);
 
@@ -821,7 +839,10 @@ fn create_bubble_settings(
     left_col.set_width_request(250);
 
     // Theme Mode (Added for consistency, mapped to main config theme as per plan)
-    left_col.append(&create_theme_section(config.keystroke_theme.clone(), config_service));
+    left_col.append(&create_theme_section(
+        config.keystroke_theme.clone(),
+        config_service,
+    ));
 
     // Opacity Section (Moved up)
     let service_c = config_service.clone();
@@ -860,7 +881,11 @@ fn create_bubble_settings(
     ));
 
     // Position Section (Moved down)
-    left_col.append(&create_position_section(config.bubble.position, config_service, true));
+    left_col.append(&create_position_section(
+        config.bubble.position,
+        config_service,
+        true,
+    ));
 
     grid.attach(&left_col, 0, 0, 1, 1);
 

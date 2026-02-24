@@ -7,12 +7,12 @@ use std::fs;
 async fn test_config_service_updates() {
     let temp_dir = tempfile::tempdir().unwrap();
     let repo = SettingsRepository::with_dir(temp_dir.path().to_path_buf());
-        let service = ConfigService::new(repo).unwrap();
-     
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-     
-        let mut rx = service.subscribe();
-        let mut cfg = service.get_config();
+    let service = ConfigService::new(repo).unwrap();
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let mut rx = service.subscribe();
+    let mut cfg = service.get_config();
     cfg.max_keys = 20;
     cfg.position = Position::TopLeft;
     service.update_config(cfg.clone()).unwrap();
@@ -30,12 +30,12 @@ async fn test_config_service_updates() {
     rx.changed().await.unwrap();
     let current = rx.borrow().clone();
     assert_eq!(current.bubble.timeout_ms, 5000);
-        assert_eq!(current.bubble.position, Position::BottomRight);
-     
-        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
-     
-        let config_path = temp_dir.path().join("config.toml");
-    
+    assert_eq!(current.bubble.position, Position::BottomRight);
+
+    tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+
+    let config_path = temp_dir.path().join("config.toml");
+
     let mut attempts = 0;
     let content = loop {
         match fs::read_to_string(&config_path) {
