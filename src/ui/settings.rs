@@ -229,46 +229,82 @@ fn create_font_selector(
     parent.append(&type_section);
 }
 
-fn create_keystroke_settings(
-    config_service: &ConfigService,
-    typography_service: &TypographyService,
-    window: &ApplicationWindow,
+// Helper to create slider sections (Opacity, Size, Corner Radius)
+fn create_slider_section(
+    label_text: &str,
+    initial_value: f64,
+    min: f64,
+    max: f64,
+    step: f64,
+    format_type: SliderFormat,
+    on_change: impl Fn(f64) + 'static,
 ) -> GtkBox {
-    let content_box = GtkBox::new(Orientation::Vertical, 0);
-    content_box.set_margin_start(32);
-    content_box.set_margin_end(32);
-    content_box.set_valign(Align::Start);
-    content_box.set_halign(Align::Fill);
+    let section = GtkBox::new(Orientation::Vertical, 4); // Reduced spacing
+    let header = GtkBox::new(Orientation::Horizontal, 0);
 
-    let header_box = GtkBox::new(Orientation::Horizontal, 12);
-    header_box.set_margin_top(16);
-    header_box.set_margin_bottom(16);
     let label = Label::builder()
-        .label("General")
-        .css_classes(vec!["title-2"])
-        .build();
-    header_box.append(&label);
-    content_box.append(&header_box);
-
-    let config = config_service.get_config();
-
-    let general_card = GtkBox::new(Orientation::Vertical, 0);
-    general_card.add_css_class("settings-card");
-    general_card.set_margin_bottom(24);
-
-    let grid = Grid::builder()
-        .column_spacing(48)
-        .row_spacing(24)
+        .label(label_text)
+        .css_classes(vec!["heading", "caption"])
+        .halign(Align::Start)
         .hexpand(true)
         .build();
 
-    general_card.append(&grid);
-    content_box.append(&general_card);
+    let val_label_text = match format_type {
+        SliderFormat::Percent => format!("{:.0}%", initial_value * 100.0),
+        SliderFormat::Multiplier => format!("{:.1}x", initial_value),
+        SliderFormat::Pixels => format!("{:.0}px", initial_value * 50.0), // Approximate for display
+    };
 
-    let left_col = GtkBox::new(Orientation::Vertical, 32);
-    left_col.set_hexpand(false);
-    left_col.set_width_request(250);
+    let val_label = Label::builder()
+        .label(&val_label_text)
+        .css_classes(vec!["badge"])
+        .build();
 
+    header.append(&label);
+    header.append(&val_label);
+    section.append(&header);
+
+    // Normalize value for adjustment if needed, but here we assume caller passes raw value
+    // For sliders like opacity (0-1) mapped to 0-100 scale:
+    let (adj_val, adj_min, adj_max, adj_step) = match format_type {
+        SliderFormat::Percent => (initial_value * 100.0, min * 100.0, max * 100.0, step * 100.0),
+        SliderFormat::Multiplier => (initial_value, min, max, step),
+        SliderFormat::Pixels => (initial_value * 100.0, min * 100.0, max * 100.0, step * 100.0), // Use 0-100 scale for smoother slider
+    };
+
+    let adjustment = Adjustment::new(adj_val, adj_min, adj_max, adj_step, adj_step * 10.0, 0.0);
+    let scale = Scale::builder()
+        .adjustment(&adjustment)
+        .draw_value(false)
+        .build();
+
+    let val_label_c = val_label.clone();
+    adjustment.connect_value_changed(move |adj| {
+        let val = adj.value();
+        let (display_text, actual_val) = match format_type {
+            SliderFormat::Percent => (format!("{:.0}%", val), val / 100.0),
+            SliderFormat::Multiplier => (format!("{:.1}x", val), val),
+            SliderFormat::Pixels => (format!("{:.0}%", val), val / 100.0), // Display as % for corner radius too
+        };
+
+        val_label_c.set_label(&display_text);
+        on_change(actual_val);
+    });
+
+    section.append(&scale);
+    section
+}
+
+enum SliderFormat {
+    Percent,
+    Multiplier,
+    Pixels,
+}
+
+fn create_theme_section(
+    current_theme: String,
+    config_service: &ConfigService,
+) -> GtkBox {
     let theme_section = GtkBox::new(Orientation::Vertical, 12);
     let theme_label = Label::builder()
         .label("THEME MODE")
@@ -287,7 +323,7 @@ fn create_keystroke_settings(
     theme_dark.set_group(Some(&theme_light));
     theme_sys.set_group(Some(&theme_light));
 
-    match config.keystroke_theme.as_str() {
+    match current_theme.as_str() {
         "light" => theme_light.set_active(true),
         "dark" => theme_dark.set_active(true),
         _ => theme_sys.set_active(true),
@@ -322,48 +358,14 @@ fn create_keystroke_settings(
     theme_box.append(&theme_dark);
     theme_box.append(&theme_sys);
     theme_section.append(&theme_box);
-    left_col.append(&theme_section);
-    let opacity_section = GtkBox::new(Orientation::Vertical, 12);
-    let opacity_header = GtkBox::new(Orientation::Horizontal, 0);
+    theme_section
+}
 
-    let opacity_label = Label::builder()
-        .label("OPACITY")
-        .css_classes(vec!["heading", "caption"])
-        .halign(Align::Start)
-        .hexpand(true)
-        .build();
-
-    let opacity_val_label = Label::builder()
-        .label(format!("{:.0}%", config.opacity * 100.0))
-        .css_classes(vec!["badge"])
-        .build();
-
-    opacity_header.append(&opacity_label);
-    opacity_header.append(&opacity_val_label);
-    opacity_section.append(&opacity_header);
-
-    let opacity_adj = Adjustment::new(config.opacity * 100.0, 0.0, 100.0, 1.0, 10.0, 0.0);
-    let opacity_scale = Scale::builder()
-        .adjustment(&opacity_adj)
-        .draw_value(false)
-        .build();
-
-    let service_c = config_service.clone();
-    let val_label_c = opacity_val_label.clone();
-    opacity_adj.connect_value_changed(move |adj| {
-        let val = adj.value();
-        val_label_c.set_label(&format!("{:.0}%", val));
-        let mut cfg = service_c.get_config();
-        let new_opacity = val / 100.0;
-        if (cfg.opacity - new_opacity).abs() > f64::EPSILON {
-            cfg.opacity = new_opacity;
-            let _ = service_c.update_config(cfg);
-        }
-    });
-
-    opacity_section.append(&opacity_scale);
-    left_col.append(&opacity_section);
-
+fn create_position_section(
+    current_pos: Position,
+    config_service: &ConfigService,
+    is_bubble: bool,
+) -> GtkBox {
     let pos_section = GtkBox::new(Orientation::Vertical, 12);
     let pos_label = Label::builder()
         .label("POSITION")
@@ -400,7 +402,7 @@ fn create_keystroke_settings(
             .css_classes(vec!["position-toggle"])
             .build();
 
-        if pos == config.position {
+        if pos == current_pos {
             btn.set_active(true);
         }
 
@@ -414,8 +416,14 @@ fn create_keystroke_settings(
         btn.connect_toggled(move |b| {
             if b.is_active() {
                 let mut cfg = service_c.get_config();
-                if cfg.position != pos {
-                    cfg.position = pos;
+                let current = if is_bubble { cfg.bubble.position } else { cfg.position };
+
+                if current != pos {
+                    if is_bubble {
+                        cfg.bubble.position = pos;
+                    } else {
+                        cfg.position = pos;
+                    }
                     let _ = service_c.update_config(cfg);
                 }
             }
@@ -425,7 +433,90 @@ fn create_keystroke_settings(
     }
 
     pos_section.append(&pos_grid);
-    left_col.append(&pos_section);
+    pos_section
+}
+
+fn create_keystroke_settings(
+    config_service: &ConfigService,
+    typography_service: &TypographyService,
+    window: &ApplicationWindow,
+) -> GtkBox {
+    let content_box = GtkBox::new(Orientation::Vertical, 0);
+    content_box.set_margin_start(32);
+    content_box.set_margin_end(32);
+    content_box.set_valign(Align::Start);
+    content_box.set_halign(Align::Fill);
+
+    let header_box = GtkBox::new(Orientation::Horizontal, 12);
+    header_box.set_margin_top(16);
+    header_box.set_margin_bottom(16);
+    let label = Label::builder()
+        .label("General")
+        .css_classes(vec!["title-2"])
+        .build();
+    header_box.append(&label);
+    content_box.append(&header_box);
+
+    let config = config_service.get_config();
+
+    let general_card = GtkBox::new(Orientation::Vertical, 0);
+    general_card.add_css_class("settings-card");
+    general_card.set_margin_bottom(24);
+
+    let grid = Grid::builder()
+        .column_spacing(48)
+        .row_spacing(24)
+        .hexpand(true)
+        .build();
+
+    general_card.append(&grid);
+    content_box.append(&general_card);
+
+    let left_col = GtkBox::new(Orientation::Vertical, 24); // Reduced spacing between sections
+    left_col.set_hexpand(false);
+    left_col.set_width_request(250);
+
+    // Theme Section
+    left_col.append(&create_theme_section(config.keystroke_theme.clone(), config_service));
+
+    // Opacity Section
+    let service_c = config_service.clone();
+    left_col.append(&create_slider_section(
+        "OPACITY",
+        config.opacity,
+        0.0,
+        1.0,
+        0.01,
+        SliderFormat::Percent,
+        move |val| {
+            let mut cfg = service_c.get_config();
+            if (cfg.opacity - val).abs() > f64::EPSILON {
+                cfg.opacity = val;
+                let _ = service_c.update_config(cfg);
+            }
+        },
+    ));
+
+    // Corner Radius Section
+    let service_c = config_service.clone();
+    left_col.append(&create_slider_section(
+        "CORNER RADIUS",
+        config.corner_radius,
+        0.0,
+        1.0,
+        0.01,
+        SliderFormat::Pixels,
+        move |val| {
+            let mut cfg = service_c.get_config();
+            if (cfg.corner_radius - val).abs() > f64::EPSILON {
+                cfg.corner_radius = val;
+                let _ = service_c.update_config(cfg);
+            }
+        },
+    ));
+
+    // Position Section
+    left_col.append(&create_position_section(config.position, config_service, false));
 
     grid.attach(&left_col, 0, 0, 1, 1);
 
@@ -442,48 +533,29 @@ fn create_keystroke_settings(
         |cfg, name| cfg.font_family = name,
     );
 
-    let size_section = GtkBox::new(Orientation::Vertical, 12);
-    let size_header = GtkBox::new(Orientation::Horizontal, 0);
-
-    let size_label = Label::builder()
-        .label("SIZE")
-        .css_classes(vec!["heading", "caption"])
-        .halign(Align::Start)
-        .hexpand(true)
-        .build();
-
-    let val_label = Label::builder()
-        .label(format!("{:.1}x", config.font_size))
-        .css_classes(vec!["badge"])
-        .build();
-
-    size_header.append(&size_label);
-    size_header.append(&val_label);
-    size_section.append(&size_header);
-
-    let size_adj = Adjustment::new(config.font_size, 0.5, 4.0, 0.1, 0.5, 0.0);
-    let size_scale = Scale::builder()
-        .adjustment(&size_adj)
-        .draw_value(false)
-        .build();
-
+    // Size Section
     let service_c = config_service.clone();
-    let val_label_c = val_label.clone();
-    size_adj.connect_value_changed(move |adj| {
-        let val = adj.value();
-        val_label_c.set_label(&format!("{:.1}x", val));
-
-        let mut cfg = service_c.get_config();
-        if (cfg.font_size - val).abs() > f64::EPSILON {
-            cfg.font_size = val;
-            let _ = service_c.update_config(cfg);
-        }
-    });
-
-    size_section.append(&size_scale);
-    right_col.append(&size_section);
+    right_col.append(&create_slider_section(
+        "SIZE",
+        config.font_size,
+        0.5,
+        4.0,
+        0.1,
+        SliderFormat::Multiplier,
+        move |val| {
+            let mut cfg = service_c.get_config();
+            if (cfg.font_size - val).abs() > f64::EPSILON {
+                cfg.font_size = val;
+                let _ = service_c.update_config(cfg);
+            }
+        },
+    ));
 
     grid.attach(&right_col, 1, 0, 1, 1);
+
+    // Behavior Section (unchanged logic, just re-using code or keeping as is)
+    // To keep file size manageable and since no changes requested here, keeping existing implementation
+    // But we need to reconstruct it here as we're replacing the whole file content
 
     let behavior_label = Label::builder()
         .label("Behavior")
@@ -558,13 +630,11 @@ fn create_keystroke_settings(
     stepper_box.add_css_class("linked");
 
     let step_minus = Button::builder().label("-").width_request(32).build();
-
     let step_display = Button::builder()
         .label(config.max_keys.to_string())
         .width_request(40)
         .can_focus(false)
         .build();
-
     let step_plus = Button::builder().label("+").width_request(32).build();
 
     stepper_box.append(&step_minus);
@@ -645,12 +715,12 @@ fn create_keystroke_settings(
     b_right.append(&card_content);
     behavior_grid.attach(&b_right, 1, 0, 1, 1);
 
+    // Event handlers for behavior
     let service_c = config_service.clone();
     let dur_val_c = dur_val_label.clone();
     dur_adj.connect_value_changed(move |adj| {
         let val = adj.value();
         dur_val_c.set_label(&format!("{:.1}s", val));
-
         let ms = (val * 1000.0) as u64;
         let mut cfg = service_c.get_config();
         if cfg.display_timeout_ms != ms {
@@ -746,112 +816,51 @@ fn create_bubble_settings(
     general_card.append(&grid);
     content_box.append(&general_card);
 
-    let left_col = GtkBox::new(Orientation::Vertical, 32);
+    let left_col = GtkBox::new(Orientation::Vertical, 24); // Reduced spacing
     left_col.set_hexpand(false);
     left_col.set_width_request(250);
 
-    let pos_section = GtkBox::new(Orientation::Vertical, 12);
-    let pos_label = Label::builder()
-        .label("POSITION")
-        .css_classes(vec!["heading", "caption"])
-        .halign(Align::Start)
-        .build();
-    pos_section.append(&pos_label);
+    // Theme Mode (Added for consistency, mapped to main config theme as per plan)
+    left_col.append(&create_theme_section(config.keystroke_theme.clone(), config_service));
 
-    let pos_grid = Grid::builder()
-        .row_spacing(6)
-        .column_spacing(6)
-        .halign(Align::Start)
-        .css_classes(vec!["position-grid"])
-        .build();
-
-    let positions = [
-        (Position::TopLeft, 0, 0),
-        (Position::TopCenter, 1, 0),
-        (Position::TopRight, 2, 0),
-        (Position::MiddleLeft, 0, 1),
-        (Position::Center, 1, 1),
-        (Position::MiddleRight, 2, 1),
-        (Position::BottomLeft, 0, 2),
-        (Position::BottomCenter, 1, 2),
-        (Position::BottomRight, 2, 2),
-    ];
-
-    let mut first_btn: Option<ToggleButton> = None;
-
-    for (pos, col, row) in positions {
-        let btn = ToggleButton::builder()
-            .width_request(42)
-            .height_request(22)
-            .css_classes(vec!["position-toggle"])
-            .build();
-
-        if pos == config.bubble.position {
-            btn.set_active(true);
-        }
-
-        if let Some(ref first) = first_btn {
-            btn.set_group(Some(first));
-        } else {
-            first_btn = Some(btn.clone());
-        }
-
-        let service_c = config_service.clone();
-        btn.connect_toggled(move |b| {
-            if b.is_active() {
-                let mut cfg = service_c.get_config();
-                if cfg.bubble.position != pos {
-                    cfg.bubble.position = pos;
-                    let _ = service_c.update_config(cfg);
-                }
-            }
-        });
-
-        pos_grid.attach(&btn, col, row, 1, 1);
-    }
-
-    pos_section.append(&pos_grid);
-    left_col.append(&pos_section);
-    let opacity_section = GtkBox::new(Orientation::Vertical, 12);
-    let opacity_header = GtkBox::new(Orientation::Horizontal, 0);
-
-    let opacity_label = Label::builder()
-        .label("OPACITY")
-        .css_classes(vec!["heading", "caption"])
-        .halign(Align::Start)
-        .hexpand(true)
-        .build();
-
-    let opacity_val_label = Label::builder()
-        .label(format!("{:.0}%", config.bubble.opacity * 100.0))
-        .css_classes(vec!["badge"])
-        .build();
-
-    opacity_header.append(&opacity_label);
-    opacity_header.append(&opacity_val_label);
-    opacity_section.append(&opacity_header);
-
-    let opacity_adj = Adjustment::new(config.bubble.opacity * 100.0, 0.0, 100.0, 1.0, 10.0, 0.0);
-    let opacity_scale = Scale::builder()
-        .adjustment(&opacity_adj)
-        .draw_value(false)
-        .build();
-
+    // Opacity Section (Moved up)
     let service_c = config_service.clone();
-    let val_label_c = opacity_val_label.clone();
-    opacity_adj.connect_value_changed(move |adj| {
-        let val = adj.value();
-        val_label_c.set_label(&format!("{:.0}%", val));
-        let mut cfg = service_c.get_config();
-        let new_opacity = val / 100.0;
-        if (cfg.bubble.opacity - new_opacity).abs() > f64::EPSILON {
-            cfg.bubble.opacity = new_opacity;
-            let _ = service_c.update_config(cfg);
-        }
-    });
+    left_col.append(&create_slider_section(
+        "OPACITY",
+        config.bubble.opacity,
+        0.0,
+        1.0,
+        0.01,
+        SliderFormat::Percent,
+        move |val| {
+            let mut cfg = service_c.get_config();
+            if (cfg.bubble.opacity - val).abs() > f64::EPSILON {
+                cfg.bubble.opacity = val;
+                let _ = service_c.update_config(cfg);
+            }
+        },
+    ));
 
-    opacity_section.append(&opacity_scale);
-    left_col.append(&opacity_section);
+    // Corner Radius Section
+    let service_c = config_service.clone();
+    left_col.append(&create_slider_section(
+        "CORNER RADIUS",
+        config.bubble.corner_radius,
+        0.0,
+        1.0,
+        0.01,
+        SliderFormat::Pixels,
+        move |val| {
+            let mut cfg = service_c.get_config();
+            if (cfg.bubble.corner_radius - val).abs() > f64::EPSILON {
+                cfg.bubble.corner_radius = val;
+                let _ = service_c.update_config(cfg);
+            }
+        },
+    ));
+
+    // Position Section (Moved down)
+    left_col.append(&create_position_section(config.bubble.position, config_service, true));
 
     grid.attach(&left_col, 0, 0, 1, 1);
 
@@ -868,49 +877,27 @@ fn create_bubble_settings(
         |cfg, name| cfg.bubble.font_family = name,
     );
 
-    let size_section = GtkBox::new(Orientation::Vertical, 12);
-    let size_header = GtkBox::new(Orientation::Horizontal, 0);
-
-    let size_label = Label::builder()
-        .label("SIZE")
-        .css_classes(vec!["heading", "caption"])
-        .halign(Align::Start)
-        .hexpand(true)
-        .build();
-
-    let val_label = Label::builder()
-        .label(format!("{:.1}x", config.bubble.font_size))
-        .css_classes(vec!["badge"])
-        .build();
-
-    size_header.append(&size_label);
-    size_header.append(&val_label);
-    size_section.append(&size_header);
-
-    let size_adj = Adjustment::new(config.bubble.font_size, 0.5, 4.0, 0.1, 0.5, 0.0);
-    let size_scale = Scale::builder()
-        .adjustment(&size_adj)
-        .draw_value(false)
-        .build();
-
+    // Size Section
     let service_c = config_service.clone();
-    let val_label_c = val_label.clone();
-    size_adj.connect_value_changed(move |adj| {
-        let val = adj.value();
-        val_label_c.set_label(&format!("{:.1}x", val));
-
-        let mut cfg = service_c.get_config();
-        if (cfg.bubble.font_size - val).abs() > f64::EPSILON {
-            cfg.bubble.font_size = val;
-            let _ = service_c.update_config(cfg);
-        }
-    });
-
-    size_section.append(&size_scale);
-    right_col.append(&size_section);
+    right_col.append(&create_slider_section(
+        "SIZE",
+        config.bubble.font_size,
+        0.5,
+        4.0,
+        0.1,
+        SliderFormat::Multiplier,
+        move |val| {
+            let mut cfg = service_c.get_config();
+            if (cfg.bubble.font_size - val).abs() > f64::EPSILON {
+                cfg.bubble.font_size = val;
+                let _ = service_c.update_config(cfg);
+            }
+        },
+    ));
 
     grid.attach(&right_col, 1, 0, 1, 1);
 
+    // Behavior Section
     let behavior_label = Label::builder()
         .label("Behavior")
         .css_classes(vec!["title-2"])

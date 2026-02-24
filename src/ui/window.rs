@@ -9,21 +9,33 @@ fn generate_overlay_css(
     keystroke_font_family: &str,
     keystroke_font_size: f64,
     keystroke_opacity: f64,
+    keystroke_corner_radius: f64,
     bubble_font_family: &str,
     bubble_font_size: f64,
     bubble_opacity: f64,
+    bubble_corner_radius: f64,
 ) -> String {
-    let safe_ks_family = keystroke_font_family.replace('"', "\\\"");
-    let safe_bubble_family = bubble_font_family.replace('"', "\\\"");
+    let safe_ks_family = keystroke_font_family.replace('"', "\\"");
+    let safe_bubble_family = bubble_font_family.replace('"', "\\"");
+
+    // Keystroke: simple radius (max ~30px for pill shape)
+    let ks_radius_px = keystroke_corner_radius * 30.0;
+    let ks_radius_str = format!("{:.1}px", ks_radius_px);
+
+    // Bubble: specific corners (max ~50px as requested), top-left always 0
+    let b_radius_px = bubble_corner_radius * 50.0;
+    let b_radius_str = format!("0px {:.1}px {:.1}px {:.1}px", b_radius_px, b_radius_px, b_radius_px);
 
     let overlay = format!(
         include_str!("../../style/overlay.css"),
         keystroke_font_family = safe_ks_family,
         keystroke_font_size = keystroke_font_size,
         keystroke_opacity = keystroke_opacity,
+        keystroke_border_radius = ks_radius_str,
         bubble_font_family = safe_bubble_family,
         bubble_font_size = bubble_font_size,
-        bubble_opacity = bubble_opacity
+        bubble_opacity = bubble_opacity,
+        bubble_border_radius = b_radius_str
     );
     format!(
         "{}\n{}\n{}\n{}",
@@ -75,9 +87,11 @@ pub fn update_css_provider(provider: &CssProvider, config: &Config) {
         &config.font_family,
         config.font_size,
         config.opacity,
+        config.corner_radius,
         &config.bubble.font_family,
         config.bubble.font_size,
         config.bubble.opacity,
+        config.bubble.corner_radius,
     );
     provider.load_from_string(&css);
 }

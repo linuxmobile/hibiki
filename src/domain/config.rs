@@ -131,6 +131,7 @@ pub struct BubbleConfig {
     pub hotkey: String,
     pub timeout_ms: u64,
     pub opacity: f64,
+    pub corner_radius: f64,
 }
 
 impl Validate for BubbleConfig {
@@ -139,6 +140,7 @@ impl Validate for BubbleConfig {
 
         self.timeout_ms = self.timeout_ms.clamp(100, 30000);
         self.opacity = self.opacity.clamp(0.0, 1.0);
+        self.corner_radius = self.corner_radius.clamp(0.0, 1.0);
 
         self.audio.validate();
     }
@@ -156,6 +158,7 @@ impl Default for BubbleConfig {
             hotkey: "<Shift><Control>b".to_string(),
             timeout_ms: DEFAULT_BUBBLE_TIMEOUT_MS,
             opacity: 1.0,
+            corner_radius: 0.36, // Approx 18px based on 50px max
         }
     }
 }
@@ -203,6 +206,8 @@ pub struct KeystrokeConfig {
     pub bubble: BubbleConfig,
 
     pub audio: AudioConfig,
+
+    pub corner_radius: f64,
 }
 
 impl Validate for KeystrokeConfig {
@@ -218,6 +223,8 @@ impl Validate for KeystrokeConfig {
         self.font_size = self.font_size.clamp(1.0, 10.0);
 
         self.margin = self.margin.clamp(-100, 1000);
+
+        self.corner_radius = self.corner_radius.clamp(0.0, 1.0);
 
         self.bubble.validate();
         self.audio.validate();
@@ -247,6 +254,7 @@ impl Default for KeystrokeConfig {
             keyboard_layout: None,
             bubble: BubbleConfig::default(),
             audio: AudioConfig::default(),
+            corner_radius: 1.0,
         }
     }
 }
@@ -276,20 +284,24 @@ mod tests {
             font_size: 0.0,
             timeout_ms: 50,
             opacity: 1.5,
+            corner_radius: 1.5,
             ..Default::default()
         };
         config.validate();
         assert_eq!(config.font_size, 1.0);
         assert_eq!(config.timeout_ms, 100);
         assert_eq!(config.opacity, 1.0);
+        assert_eq!(config.corner_radius, 1.0);
 
         config.font_size = 15.0;
         config.timeout_ms = 40000;
         config.opacity = -0.5;
+        config.corner_radius = -0.5;
         config.validate();
         assert_eq!(config.font_size, 10.0);
         assert_eq!(config.timeout_ms, 30000);
         assert_eq!(config.opacity, 0.0);
+        assert_eq!(config.corner_radius, 0.0);
     }
 
     #[test]
@@ -301,6 +313,7 @@ mod tests {
             opacity: 1.5,
             font_size: 0.0,
             margin: -200,
+            corner_radius: 2.0,
             ..Default::default()
         };
         config.validate();
@@ -310,6 +323,7 @@ mod tests {
         assert_eq!(config.opacity, 1.0);
         assert_eq!(config.font_size, 1.0);
         assert_eq!(config.margin, -100);
+        assert_eq!(config.corner_radius, 1.0);
 
         config.display_timeout_ms = 40000;
         config.max_keys = 100;
@@ -317,6 +331,7 @@ mod tests {
         config.opacity = -0.5;
         config.font_size = 15.0;
         config.margin = 1500;
+        config.corner_radius = -1.0;
         config.validate();
         assert_eq!(config.display_timeout_ms, 30000);
         assert_eq!(config.max_keys, 50);
@@ -324,5 +339,6 @@ mod tests {
         assert_eq!(config.opacity, 0.0);
         assert_eq!(config.font_size, 10.0);
         assert_eq!(config.margin, 1000);
+        assert_eq!(config.corner_radius, 0.0);
     }
 }
