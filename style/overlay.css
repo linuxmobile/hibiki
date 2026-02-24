@@ -14,7 +14,7 @@
 }}
 
 .keystroke-key {{
-    background-color: @card_bg_color;
+    background-color: alpha(@theme_bg_color, {keystroke_opacity});
     color: @card_fg_color;
     border-radius: 9999px;
     padding: 10px 16px;
@@ -74,7 +74,7 @@
 }}
 
 .bubble {{
-    background-color: @card_bg_color;
+    background-color: alpha(@theme_bg_color, {bubble_opacity});
     color: @card_fg_color;
     border-radius: 0px 18px 18px 18px;
     padding: 10px 16px;

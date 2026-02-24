@@ -323,6 +323,46 @@ fn create_keystroke_settings(
     theme_box.append(&theme_sys);
     theme_section.append(&theme_box);
     left_col.append(&theme_section);
+    let opacity_section = GtkBox::new(Orientation::Vertical, 12);
+    let opacity_header = GtkBox::new(Orientation::Horizontal, 0);
+
+    let opacity_label = Label::builder()
+        .label("OPACITY")
+        .css_classes(vec!["heading", "caption"])
+        .halign(Align::Start)
+        .hexpand(true)
+        .build();
+
+    let opacity_val_label = Label::builder()
+        .label(format!("{:.0}%", config.opacity * 100.0))
+        .css_classes(vec!["badge"])
+        .build();
+
+    opacity_header.append(&opacity_label);
+    opacity_header.append(&opacity_val_label);
+    opacity_section.append(&opacity_header);
+
+    let opacity_adj = Adjustment::new(config.opacity * 100.0, 0.0, 100.0, 1.0, 10.0, 0.0);
+    let opacity_scale = Scale::builder()
+        .adjustment(&opacity_adj)
+        .draw_value(false)
+        .build();
+
+    let service_c = config_service.clone();
+    let val_label_c = opacity_val_label.clone();
+    opacity_adj.connect_value_changed(move |adj| {
+        let val = adj.value();
+        val_label_c.set_label(&format!("{:.0}%", val));
+        let mut cfg = service_c.get_config();
+        let new_opacity = val / 100.0;
+        if (cfg.opacity - new_opacity).abs() > f64::EPSILON {
+            cfg.opacity = new_opacity;
+            let _ = service_c.update_config(cfg);
+        }
+    });
+
+    opacity_section.append(&opacity_scale);
+    left_col.append(&opacity_section);
 
     let pos_section = GtkBox::new(Orientation::Vertical, 12);
     let pos_label = Label::builder()
@@ -772,6 +812,46 @@ fn create_bubble_settings(
 
     pos_section.append(&pos_grid);
     left_col.append(&pos_section);
+    let opacity_section = GtkBox::new(Orientation::Vertical, 12);
+    let opacity_header = GtkBox::new(Orientation::Horizontal, 0);
+
+    let opacity_label = Label::builder()
+        .label("OPACITY")
+        .css_classes(vec!["heading", "caption"])
+        .halign(Align::Start)
+        .hexpand(true)
+        .build();
+
+    let opacity_val_label = Label::builder()
+        .label(format!("{:.0}%", config.bubble.opacity * 100.0))
+        .css_classes(vec!["badge"])
+        .build();
+
+    opacity_header.append(&opacity_label);
+    opacity_header.append(&opacity_val_label);
+    opacity_section.append(&opacity_header);
+
+    let opacity_adj = Adjustment::new(config.bubble.opacity * 100.0, 0.0, 100.0, 1.0, 10.0, 0.0);
+    let opacity_scale = Scale::builder()
+        .adjustment(&opacity_adj)
+        .draw_value(false)
+        .build();
+
+    let service_c = config_service.clone();
+    let val_label_c = opacity_val_label.clone();
+    opacity_adj.connect_value_changed(move |adj| {
+        let val = adj.value();
+        val_label_c.set_label(&format!("{:.0}%", val));
+        let mut cfg = service_c.get_config();
+        let new_opacity = val / 100.0;
+        if (cfg.bubble.opacity - new_opacity).abs() > f64::EPSILON {
+            cfg.bubble.opacity = new_opacity;
+            let _ = service_c.update_config(cfg);
+        }
+    });
+
+    opacity_section.append(&opacity_scale);
+    left_col.append(&opacity_section);
 
     grid.attach(&left_col, 0, 0, 1, 1);
 

@@ -130,6 +130,7 @@ pub struct BubbleConfig {
     pub draggable: bool,
     pub hotkey: String,
     pub timeout_ms: u64,
+    pub opacity: f64,
 }
 
 impl Validate for BubbleConfig {
@@ -137,6 +138,7 @@ impl Validate for BubbleConfig {
         self.font_size = self.font_size.clamp(1.0, 10.0);
 
         self.timeout_ms = self.timeout_ms.clamp(100, 30000);
+        self.opacity = self.opacity.clamp(0.0, 1.0);
 
         self.audio.validate();
     }
@@ -153,6 +155,7 @@ impl Default for BubbleConfig {
             draggable: false,
             hotkey: "<Shift><Control>b".to_string(),
             timeout_ms: DEFAULT_BUBBLE_TIMEOUT_MS,
+            opacity: 0.9,
         }
     }
 }
@@ -272,17 +275,21 @@ mod tests {
         let mut config = BubbleConfig {
             font_size: 0.0,
             timeout_ms: 50,
+            opacity: 1.5,
             ..Default::default()
         };
         config.validate();
         assert_eq!(config.font_size, 1.0);
         assert_eq!(config.timeout_ms, 100);
+        assert_eq!(config.opacity, 1.0);
 
         config.font_size = 15.0;
         config.timeout_ms = 40000;
+        config.opacity = -0.5;
         config.validate();
         assert_eq!(config.font_size, 10.0);
         assert_eq!(config.timeout_ms, 30000);
+        assert_eq!(config.opacity, 0.0);
     }
 
     #[test]
