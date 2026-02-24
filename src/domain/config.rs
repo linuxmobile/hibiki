@@ -155,7 +155,7 @@ impl Default for BubbleConfig {
             draggable: false,
             hotkey: "<Shift><Control>b".to_string(),
             timeout_ms: DEFAULT_BUBBLE_TIMEOUT_MS,
-            opacity: 0.9,
+            opacity: 1.0,
         }
     }
 }
@@ -235,7 +235,7 @@ impl Default for KeystrokeConfig {
             show_modifiers: true,
             all_keyboards: true,
             font_scale: 1.0,
-            opacity: 0.9,
+            opacity: 1.0,
             font_family: "Sans".to_string(),
             font_size: 1.2,
             keystroke_theme: "system".to_string(),

@@ -33,7 +33,7 @@
 }}
 
 .keystroke-key.modifier {{
-    background-color: @accent_bg_color;
+    background-color: alpha(@accent_bg_color, {keystroke_opacity});
     color: @accent_fg_color;
 }}
 
