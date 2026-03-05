@@ -1,6 +1,7 @@
 use async_channel::Sender;
 use ksni::{self, menu::StandardItem, Icon, MenuItem, Tray, TrayService};
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 use tracing::{debug, error, info};
 
 #[derive(Debug, Clone)]
@@ -96,18 +97,15 @@ impl Tray for KeystrokeTray {
     }
 
     fn icon_pixmap(&self) -> Vec<Icon> {
-        self.state
-            .lock()
-            .map(|s| s.icon_pixmap.clone())
-            .unwrap_or_else(|_| generate_icon_pixmap())
+        self.state.lock().icon_pixmap.clone()
     }
 
     fn tool_tip(&self) -> ksni::ToolTip {
-        let status = self
-            .state
-            .lock()
-            .map(|s| if s.paused { "Paused" } else { "Running" })
-            .unwrap_or("Running");
+        let status = if self.state.lock().paused {
+            "Paused"
+        } else {
+            "Running"
+        };
         ksni::ToolTip {
             icon_name: String::new(),
             icon_pixmap: Vec::new(),
@@ -124,11 +122,11 @@ impl Tray for KeystrokeTray {
     }
 
     fn menu(&self) -> Vec<MenuItem<Self>> {
-        let pause_label = self
-            .state
-            .lock()
-            .map(|s| if s.paused { "Resume" } else { "Pause" })
-            .unwrap_or("Pause");
+        let pause_label = if self.state.lock().paused {
+            "Resume"
+        } else {
+            "Pause"
+        };
 
         vec![
             MenuItem::Standard(StandardItem {
@@ -185,24 +183,20 @@ pub struct TrayHandle {
 
 impl TrayHandle {
     pub fn set_paused(&self, paused: bool) {
-        if let Ok(mut state) = self.state.lock() {
-            state.paused = paused;
-        }
+        self.state.lock().paused = paused;
 
         self.service_handle.update(|_| {});
     }
 
     pub fn set_icon(&self, icon: Vec<Icon>) {
-        if let Ok(mut state) = self.state.lock() {
-            state.icon_pixmap = icon;
-        }
+        self.state.lock().icon_pixmap = icon;
 
         self.service_handle.update(|_| {});
     }
 
     #[allow(dead_code)]
     pub fn is_paused(&self) -> bool {
-        self.state.lock().map(|s| s.paused).unwrap_or(false)
+        self.state.lock().paused
     }
 }
 
