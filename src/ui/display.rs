@@ -121,16 +121,6 @@ impl KeyDisplayWidget {
         }
 
         let current_combo = self.get_current_combo(key.key);
-        if let Some(existing) = self
-            .displayed_keys
-            .iter_mut()
-            .find(|dk| dk.keys == current_combo)
-        {
-            existing.last_active = Instant::now();
-            existing.is_held = true;
-            existing.widget.remove_css_class("fading");
-            return;
-        }
 
         self.remove_expired();
 
