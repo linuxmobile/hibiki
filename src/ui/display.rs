@@ -13,6 +13,8 @@ const LOGO_SVG: &[u8] = include_bytes!("../assets/logo-symbolic.svg");
 struct DisplayedKey {
     keys: Vec<Key>,
 
+    count: usize,
+
     last_active: Instant,
 
     is_held: bool,
@@ -121,16 +123,6 @@ impl KeyDisplayWidget {
         }
 
         let current_combo = self.get_current_combo(key.key);
-        if let Some(existing) = self
-            .displayed_keys
-            .iter_mut()
-            .find(|dk| dk.keys == current_combo)
-        {
-            existing.last_active = Instant::now();
-            existing.is_held = true;
-            existing.widget.remove_css_class("fading");
-            return;
-        }
 
         self.remove_expired();
 
@@ -140,12 +132,26 @@ impl KeyDisplayWidget {
             }
         }
 
-        let widget = self.create_combo_widget(&current_combo);
+        let mut count: usize = 1;
+
+        if let Some(last) = self
+            .displayed_keys
+            .iter_mut()
+            .last()
+            .filter(|l| l.keys == current_combo)
+        {
+            last.count += 1;
+            count = last.count;
+            self.container.remove(&last.widget);
+            self.displayed_keys.pop_back();
+        }
+        let widget = self.create_combo_widget(&current_combo, count);
 
         self.container.append(&widget);
 
         let displayed = DisplayedKey {
             keys: current_combo,
+            count,
             last_active: Instant::now(),
             is_held: true,
             widget,
@@ -168,7 +174,7 @@ impl KeyDisplayWidget {
         combo
     }
 
-    fn create_combo_widget(&self, keys: &[Key]) -> Widget {
+    fn create_combo_widget(&self, keys: &[Key], count: usize) -> Widget {
         let key_box = GtkBox::builder()
             .orientation(Orientation::Horizontal)
             .spacing(6)
@@ -206,6 +212,21 @@ impl KeyDisplayWidget {
                     .build();
                 key_box.append(&label);
             }
+        }
+
+        if count > 1 {
+            let sep = Label::new(Some("x"));
+            sep.add_css_class("combo-separator");
+            sep.set_halign(gtk4::Align::Center);
+            key_box.append(&sep);
+
+            let label = Label::builder()
+                .label(&count.to_string())
+                .halign(gtk4::Align::Center)
+                .valign(gtk4::Align::Center)
+                .hexpand(true)
+                .build();
+            key_box.append(&label);
         }
 
         key_box.upcast()
