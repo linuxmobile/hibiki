@@ -7,12 +7,12 @@ use crate::compositor::LayoutEvent;
 use crate::domain::CaptureState;
 use crate::infrastructure::audio::SoundPackLoader;
 use crate::input::{
-    InputControlCommand, KeyEvent, KeyListener, LayoutManager, ListenerConfig, ListenerHandle,
+    InputControlCommand, KeyEvent, KeyListener, LayoutManager, ListenerConfig, ListenerHandle, MouseEvent,
 };
 use crate::tray::{TrayAction, TrayHandle};
 use crate::ui::{
-    create_bubble_window, create_launcher_window, create_settings_window, create_window,
-    setup_drag, show_launcher, show_settings, BubbleDisplayWidget, DisplayMode, KeyDisplayWidget,
+    create_bubble_window, create_launcher_window, create_mouse_cursor_window, create_settings_window, create_window,
+    setup_drag, show_launcher, show_settings, BubbleDisplayWidget, DisplayMode, KeyDisplayWidget, MouseCursorWidget,
 };
 use anyhow::Result;
 use async_channel::{bounded, Receiver};
@@ -41,6 +41,7 @@ struct RuntimeState {
     mode: Option<DisplayMode>,
     routing_engine: RoutingEngine,
     keystroke_window: Option<ApplicationWindow>,
+    mouse_cursor_window: Option<ApplicationWindow>,
     bubble_window: Option<ApplicationWindow>,
     launcher_window: Option<ApplicationWindow>,
     settings_window: Option<ApplicationWindow>,
@@ -286,6 +287,9 @@ fn close_mode_windows(state: &Rc<RefCell<RuntimeState>>) {
     if let Some(window) = s.keystroke_window.take() {
         window.close();
     }
+    if let Some(window) = s.mouse_cursor_window.take() {
+        window.close();
+    }
     if let Some(window) = s.bubble_window.take() {
         window.close();
     }
@@ -488,6 +492,7 @@ fn start_keystroke_mode(
     }
 
     let window = create_window(app, &config)?;
+    let mouse_window = create_mouse_cursor_window(app, &config)?;
 
     if config.keystroke_draggable {
         let controllers = setup_drag(&window);
@@ -499,9 +504,13 @@ fn start_keystroke_mode(
         config.display_timeout_ms,
     )));
 
-    window.set_child(Some(display.borrow().widget()));
+    let mouse_display = Rc::new(RefCell::new(MouseCursorWidget::new()));
 
-    let (sender, receiver) = bounded::<KeyEvent>(1024);
+    window.set_child(Some(display.borrow().widget()));
+    mouse_window.set_child(Some(mouse_display.borrow().widget()));
+
+    let (key_sender, key_receiver) = bounded::<KeyEvent>(1024);
+    let (mouse_sender, mouse_receiver) = bounded::<MouseEvent>(256);
 
     let listener_config = ListenerConfig {
         all_keyboards: config.all_keyboards,
@@ -509,7 +518,7 @@ fn start_keystroke_mode(
     };
 
     let audio_dispatcher = state.borrow().audio_dispatcher.clone();
-    let listener = KeyListener::new(sender, listener_config, audio_dispatcher);
+    let listener = KeyListener::new(key_sender, mouse_sender, listener_config, audio_dispatcher);
     let handle = listener.start()?;
 
     let mode_active = Arc::new(AtomicBool::new(true));
@@ -518,6 +527,7 @@ fn start_keystroke_mode(
         s.mode_active = Some(Arc::clone(&mode_active));
         s.listener_handle = Some(handle);
         s.keystroke_window = Some(window.clone());
+        s.mouse_cursor_window = Some(mouse_window.clone());
     }
 
     let active_key_loop = Arc::clone(&mode_active);
@@ -528,7 +538,7 @@ fn start_keystroke_mode(
     let config_service_clone = config_service.clone();
 
     glib::MainContext::default().spawn_local(async move {
-        while let Ok(event) = receiver.recv().await {
+        while let Ok(event) = key_receiver.recv().await {
             if !active_key_loop.load(Ordering::SeqCst) {
                 break;
             }
@@ -577,6 +587,35 @@ fn start_keystroke_mode(
             }
         }
         debug!("Keystroke event loop terminated");
+    });
+
+    let active = Arc::clone(&mode_active);
+    let state_clone = Rc::clone(state);
+    let mouse_display_clone = Rc::clone(&mouse_display);
+
+    glib::MainContext::default().spawn_local(async move {
+        while let Ok(event) = mouse_receiver.recv().await {
+            if !active.load(Ordering::SeqCst) {
+                break;
+            }
+
+            let (capture, _) = state_clone.borrow().routing_engine.get_states();
+            if capture == CaptureState::Paused {
+                continue;
+            }
+
+            match event {
+                MouseEvent::Moved { .. } => {
+                    // Cursor position tracking not possible on Wayland
+                    // Mouse bubble window stays anchored near keystroke display
+                }
+                _ => {
+                    let mut display = mouse_display_clone.borrow_mut();
+                    display.handle_event(&event);
+                }
+            }
+        }
+        debug!("Mouse event loop terminated");
     });
 
     let mut rx = config_service.subscribe();
@@ -653,7 +692,12 @@ fn start_keystroke_mode(
     let state_clone = Rc::clone(state);
     setup_keystroke_cleanup_timer(display.clone(), window.clone(), state_clone, active);
 
+    let active = Arc::clone(&mode_active);
+    let state_clone = Rc::clone(state);
+    setup_mouse_cleanup_timer(mouse_display.clone(), mouse_window.clone(), state_clone, active);
+
     window.present();
+    mouse_window.present();
 
     Ok(())
 }
@@ -739,7 +783,8 @@ fn start_bubble_mode(
         });
     }
 
-    let (sender, receiver) = bounded::<KeyEvent>(1024);
+    let (key_sender, key_receiver) = bounded::<KeyEvent>(1024);
+    let (mouse_sender, _mouse_receiver) = bounded::<MouseEvent>(256);
 
     let listener_config = ListenerConfig {
         all_keyboards: config.all_keyboards,
@@ -747,7 +792,7 @@ fn start_bubble_mode(
     };
 
     let audio_dispatcher = state.borrow().audio_dispatcher.clone();
-    let listener = KeyListener::new(sender, listener_config, audio_dispatcher);
+    let listener = KeyListener::new(key_sender, mouse_sender, listener_config, audio_dispatcher);
     let handle = listener.start()?;
 
     {
@@ -778,7 +823,7 @@ fn start_bubble_mode(
         let app = app_clone.clone();
         let config_service = config_service_clone.clone();
 
-        while let Ok(event) = receiver.recv().await {
+        while let Ok(event) = key_receiver.recv().await {
             if !active.load(Ordering::SeqCst) {
                 break;
             }
@@ -973,6 +1018,42 @@ fn setup_keystroke_cleanup_timer(
         display.remove_expired();
 
         if display.has_keys() {
+            window.remove_css_class("fading-out");
+            window.set_visible(true);
+        } else if !window.has_css_class("fading-out") {
+            window.add_css_class("fading-out");
+
+            let w = window.clone();
+            glib::timeout_add_local_once(Duration::from_millis(200), move || {
+                if w.has_css_class("fading-out") {
+                    w.set_visible(false);
+                }
+            });
+        }
+
+        ControlFlow::Continue
+    });
+}
+
+fn setup_mouse_cleanup_timer(
+    display: Rc<RefCell<MouseCursorWidget>>,
+    window: ApplicationWindow,
+    state: Rc<RefCell<RuntimeState>>,
+    mode_active: Arc<AtomicBool>,
+) {
+    glib::timeout_add_local(Duration::from_millis(100), move || {
+        if !mode_active.load(Ordering::SeqCst) {
+            return ControlFlow::Break;
+        }
+
+        if state.borrow().routing_engine.get_states().0 == CaptureState::Paused {
+            return ControlFlow::Continue;
+        }
+
+        let mut display = display.borrow_mut();
+        display.remove_expired();
+
+        if display.has_buttons() {
             window.remove_css_class("fading-out");
             window.set_visible(true);
         } else if !window.has_css_class("fading-out") {

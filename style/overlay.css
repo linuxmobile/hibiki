@@ -40,6 +40,49 @@
 .keystroke-key.fading {{
 }}
 
+/* Mouse button bubble styles */
+.mouse-bubble-container {{
+    padding: 0;
+    margin-right: 6px;
+}}
+
+.mouse-button-bubble {{
+    background-color: alpha(@accent_bg_color, {keystroke_opacity});
+    color: @accent_fg_color;
+    border-radius: {keystroke_border_radius};
+    padding: 10px 16px;
+    margin: 4px;
+    font-weight: bold;
+    font-family: "{keystroke_font_family}";
+    font-size: {keystroke_font_size}em;
+    border: 1px solid @borders;
+    min-width: 32px;
+    min-height: 18px;
+}}
+
+.mouse-button-bubble label {{
+    margin: 0;
+    padding: 0;
+}}
+
+.mouse-button-bubble.fading {{
+}}
+
+/* Mouse cursor window styles */
+.mouse-cursor-window {{
+    background-color: transparent;
+    padding: 0;
+    border: none;
+}}
+
+.mouse-cursor-container {{
+    padding: 0;
+}}
+
+.keystroke-key-container {{
+    padding: 4px;
+}}
+
 .combo-separator {{
     color: inherit;
     font-weight: normal;

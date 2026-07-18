@@ -17,6 +17,19 @@ impl KeyboardDevice {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct MouseDevice {
+    pub path: PathBuf,
+
+    pub name: String,
+}
+
+impl MouseDevice {
+    pub fn open(&self) -> Result<Device> {
+        Device::open(&self.path).with_context(|| format!("Failed to open device: {:?}", self.path))
+    }
+}
+
 pub fn discover_keyboards() -> Result<Vec<KeyboardDevice>> {
     let mut keyboards = Vec::new();
     let input_dir = PathBuf::from("/dev/input");
@@ -58,6 +71,47 @@ pub fn discover_keyboards() -> Result<Vec<KeyboardDevice>> {
     Ok(keyboards)
 }
 
+pub fn discover_mice() -> Result<Vec<MouseDevice>> {
+    let mut mice = Vec::new();
+    let input_dir = PathBuf::from("/dev/input");
+
+    let entries = fs::read_dir(&input_dir)
+        .with_context(|| format!("Failed to read directory: {:?}", input_dir))?;
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let file_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+
+        if !file_name.starts_with("event") {
+            continue;
+        }
+
+        match Device::open(&path) {
+            Ok(device) => {
+                if is_mouse(&device) {
+                    let name = device.name().unwrap_or("Unknown Mouse").to_string();
+
+                    info!("Found mouse: {} at {:?}", name, path);
+
+                    mice.push(MouseDevice { path, name });
+                }
+            }
+            Err(e) => {
+                debug!("Could not open {:?}: {}", path, e);
+            }
+        }
+    }
+
+    if mice.is_empty() {
+        warn!("No mouse devices found. Ensure you are in the 'input' group.");
+    }
+
+    Ok(mice)
+}
+
 fn is_keyboard(device: &Device) -> bool {
     let supported = device.supported_events();
     if !supported.contains(evdev::EventType::KEY) {
@@ -73,6 +127,24 @@ fn is_keyboard(device: &Device) -> bool {
     }
 
     false
+}
+
+fn is_mouse(device: &Device) -> bool {
+    let supported = device.supported_events();
+
+    if !supported.contains(evdev::EventType::KEY) {
+        return false;
+    }
+
+    let has_mouse_buttons = device.supported_keys().map_or(false, |keys| {
+        keys.contains(evdev::Key::BTN_LEFT)
+            || keys.contains(evdev::Key::BTN_RIGHT)
+            || keys.contains(evdev::Key::BTN_MIDDLE)
+    });
+
+    let has_rel_events = supported.contains(evdev::EventType::RELATIVE);
+
+    has_mouse_buttons && has_rel_events
 }
 
 fn is_virtual(name: &str) -> bool {

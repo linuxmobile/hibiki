@@ -1,5 +1,5 @@
 use crate::application::audio_dispatcher::AudioDispatcher;
-use crate::input::device::{discover_keyboards, KeyboardDevice};
+use crate::input::device::{discover_keyboards, discover_mice, KeyboardDevice, MouseDevice};
 use crate::input::keymap::KeyDisplay;
 use anyhow::{Context, Result};
 use async_channel::{Receiver, Sender, TrySendError};
@@ -20,6 +20,51 @@ pub enum KeyEvent {
     AllReleased,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MouseButton {
+    Left,
+    Right,
+    Middle,
+    Side,
+    Extra,
+    WheelUp,
+    WheelDown,
+}
+
+impl MouseButton {
+    pub fn from_key(key: Key) -> Option<Self> {
+        match key {
+            Key::BTN_LEFT => Some(MouseButton::Left),
+            Key::BTN_RIGHT => Some(MouseButton::Right),
+            Key::BTN_MIDDLE => Some(MouseButton::Middle),
+            Key::BTN_SIDE => Some(MouseButton::Side),
+            Key::BTN_EXTRA => Some(MouseButton::Extra),
+            _ => None,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            MouseButton::Left => "L",
+            MouseButton::Right => "R",
+            MouseButton::Middle => "M",
+            MouseButton::Side => "B4",
+            MouseButton::Extra => "B5",
+            MouseButton::WheelUp => "⟰",
+            MouseButton::WheelDown => "⟱",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum MouseEvent {
+    Pressed(MouseButton),
+    Released(MouseButton),
+    Moved { x: i32, y: i32 },
+    Scroll { delta: i32 },
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputControlCommand {
     Grab,
@@ -30,6 +75,7 @@ pub enum InputControlCommand {
 pub struct ListenerConfig {
     pub all_keyboards: bool,
     pub ignored_keys: HashSet<Key>,
+    pub listen_mouse: bool,
 }
 
 impl Default for ListenerConfig {
@@ -37,6 +83,7 @@ impl Default for ListenerConfig {
         Self {
             all_keyboards: true,
             ignored_keys: HashSet::new(),
+            listen_mouse: true,
         }
     }
 }
@@ -63,7 +110,8 @@ impl Drop for ListenerHandle {
 }
 
 pub struct KeyListener {
-    sender: Sender<KeyEvent>,
+    key_sender: Sender<KeyEvent>,
+    mouse_sender: Sender<MouseEvent>,
     running: Arc<AtomicBool>,
     config: ListenerConfig,
     audio_dispatcher: Option<AudioDispatcher>,
@@ -72,12 +120,14 @@ pub struct KeyListener {
 impl KeyListener {
     #[must_use]
     pub fn new(
-        sender: Sender<KeyEvent>,
+        key_sender: Sender<KeyEvent>,
+        mouse_sender: Sender<MouseEvent>,
         config: ListenerConfig,
         audio_dispatcher: Option<AudioDispatcher>,
     ) -> Self {
         Self {
-            sender,
+            key_sender,
+            mouse_sender,
             running: Arc::new(AtomicBool::new(false)),
             config,
             audio_dispatcher,
@@ -102,7 +152,7 @@ impl KeyListener {
         let mut control_txs = Vec::new();
 
         for keyboard in devices_to_use {
-            let sender = self.sender.clone();
+            let sender = self.key_sender.clone();
             let running = Arc::clone(&self.running);
             let ignored_keys = self.config.ignored_keys.clone();
             let audio_dispatcher = self.audio_dispatcher.clone();
@@ -111,7 +161,7 @@ impl KeyListener {
             control_txs.push(control_tx);
 
             thread::spawn(move || {
-                if let Err(e) = listen_to_device(
+                if let Err(e) = listen_to_keyboard(
                     keyboard,
                     sender,
                     running,
@@ -124,6 +174,26 @@ impl KeyListener {
             });
         }
 
+        if self.config.listen_mouse {
+            match discover_mice() {
+                Ok(mice) => {
+                    for mouse in mice {
+                        let sender = self.mouse_sender.clone();
+                        let running = Arc::clone(&self.running);
+
+                        thread::spawn(move || {
+                            if let Err(e) = listen_to_mouse(mouse, sender, running) {
+                                error!("Mouse listener error: {}", e);
+                            }
+                        });
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to discover mice: {}", e);
+                }
+            }
+        }
+
         Ok(ListenerHandle {
             running: self.running.clone(),
             control_txs,
@@ -131,7 +201,7 @@ impl KeyListener {
     }
 }
 
-fn listen_to_device(
+fn listen_to_keyboard(
     keyboard: KeyboardDevice,
     sender: Sender<KeyEvent>,
     running: Arc<AtomicBool>,
@@ -321,6 +391,160 @@ fn process_events(
     Ok(())
 }
 
+fn listen_to_mouse(
+    mouse: MouseDevice,
+    sender: Sender<MouseEvent>,
+    running: Arc<AtomicBool>,
+) -> Result<()> {
+    let mut device = mouse.open()?;
+    info!("Listening to mouse: {}", mouse.name);
+
+    let raw_fd = device.as_raw_fd();
+
+    let borrowed_fd = unsafe { BorrowedFd::borrow_raw(raw_fd) };
+    let mut poll_fds = [PollFd::new(borrowed_fd, PollFlags::POLLIN)];
+    let mut pressed_buttons = HashSet::new();
+
+    while running.load(Ordering::SeqCst) {
+        let poll_result = poll(&mut poll_fds, PollTimeout::from(100_u16));
+
+        match poll_result {
+            Ok(_n) => {
+                if let Err(e) =
+                    process_mouse_events(&mut device, &sender, &mut pressed_buttons)
+                {
+                    if e.to_string().contains("Channel closed") {
+                        info!("Channel closed, stopping listener for {}", mouse.name);
+                        break;
+                    }
+                    warn!("Error processing mouse events: {}", e);
+                }
+            }
+            Err(e) => {
+                error!("Poll error: {}", e);
+                break;
+            }
+        }
+    }
+
+    info!("Stopped listening to mouse: {}", mouse.name);
+    Ok(())
+}
+
+fn process_mouse_events(
+    device: &mut Device,
+    sender: &Sender<MouseEvent>,
+    pressed_buttons: &mut HashSet<MouseButton>,
+) -> Result<()> {
+    let events = device.fetch_events().context("Failed to fetch mouse events")?;
+
+    for event in events {
+        match event.kind() {
+            InputEventKind::Key(key) => {
+                if let Some(button) = MouseButton::from_key(key) {
+                    let mouse_event = match event.value() {
+                        1 => {
+                            trace!("Mouse button pressed: {:?}", button);
+                            pressed_buttons.insert(button);
+                            MouseEvent::Pressed(button)
+                        }
+                        0 => {
+                            trace!("Mouse button released: {:?}", button);
+                            pressed_buttons.remove(&button);
+                            MouseEvent::Released(button)
+                        }
+                        _ => continue,
+                    };
+
+                    if let Err(e) = sender.try_send(mouse_event) {
+                        match e {
+                            TrySendError::Full(_) => warn!("Mouse channel full, dropping event"),
+                            TrySendError::Closed(_) => {
+                                return Err(anyhow::anyhow!("Mouse channel closed"));
+                            }
+                        }
+                    }
+                }
+            }
+            InputEventKind::RelAxis(axis) => {
+                match axis {
+                    evdev::RelativeAxisType::REL_X => {
+                        let delta = event.value();
+                        if delta != 0 {
+                            if let Err(e) = sender.try_send(MouseEvent::Moved { x: delta, y: 0 }) {
+                                match e {
+                                    TrySendError::Full(_) => {}
+                                    TrySendError::Closed(_) => {
+                                        return Err(anyhow::anyhow!("Mouse channel closed"));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    evdev::RelativeAxisType::REL_Y => {
+                        let delta = event.value();
+                        if delta != 0 {
+                            if let Err(e) = sender.try_send(MouseEvent::Moved { x: 0, y: delta }) {
+                                match e {
+                                    TrySendError::Full(_) => {}
+                                    TrySendError::Closed(_) => {
+                                        return Err(anyhow::anyhow!("Mouse channel closed"));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    evdev::RelativeAxisType::REL_WHEEL => {
+                        let delta = event.value();
+                        if delta != 0 {
+                            trace!("Mouse wheel scroll: {}", delta);
+                            if let Err(e) = sender.try_send(MouseEvent::Scroll { delta }) {
+                                match e {
+                                    TrySendError::Full(_) => {}
+                                    TrySendError::Closed(_) => {
+                                        return Err(anyhow::anyhow!("Mouse channel closed"));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if !pressed_buttons.is_empty() {
+        if let Ok(actual_state) = device.get_key_state() {
+            let stuck_buttons: Vec<MouseButton> = pressed_buttons
+                .iter()
+                .filter(|b| {
+                    let key = match b {
+                        MouseButton::Left => Key::BTN_LEFT,
+                        MouseButton::Right => Key::BTN_RIGHT,
+                        MouseButton::Middle => Key::BTN_MIDDLE,
+                        MouseButton::Side => Key::BTN_SIDE,
+                        MouseButton::Extra => Key::BTN_EXTRA,
+                        // Wheel events are not buttons, skip them
+                        MouseButton::WheelUp | MouseButton::WheelDown => return false,
+                    };
+                    !actual_state.contains(key)
+                })
+                .cloned()
+                .collect();
+
+            for button in stuck_buttons {
+                trace!("Detected stuck mouse button released: {:?}", button);
+                pressed_buttons.remove(&button);
+                let _ = sender.try_send(MouseEvent::Released(button));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -331,6 +555,26 @@ mod tests {
         let config = ListenerConfig::default();
         assert!(config.all_keyboards);
         assert!(config.ignored_keys.is_empty());
+        assert!(config.listen_mouse);
+    }
+
+    #[test]
+    fn test_mouse_button_from_key() {
+        assert_eq!(MouseButton::from_key(Key::BTN_LEFT), Some(MouseButton::Left));
+        assert_eq!(MouseButton::from_key(Key::BTN_RIGHT), Some(MouseButton::Right));
+        assert_eq!(MouseButton::from_key(Key::BTN_MIDDLE), Some(MouseButton::Middle));
+        assert_eq!(MouseButton::from_key(Key::BTN_SIDE), Some(MouseButton::Side));
+        assert_eq!(MouseButton::from_key(Key::BTN_EXTRA), Some(MouseButton::Extra));
+        assert_eq!(MouseButton::from_key(Key::KEY_A), None);
+    }
+
+    #[test]
+    fn test_mouse_button_display_name() {
+        assert_eq!(MouseButton::Left.display_name(), "L");
+        assert_eq!(MouseButton::Right.display_name(), "R");
+        assert_eq!(MouseButton::Middle.display_name(), "M");
+        assert_eq!(MouseButton::Side.display_name(), "B4");
+        assert_eq!(MouseButton::Extra.display_name(), "B5");
     }
 
     #[test]

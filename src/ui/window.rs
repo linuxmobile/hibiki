@@ -151,6 +151,72 @@ pub fn create_bubble_window(app: &Application, config: &Config) -> Result<Applic
     Ok(window)
 }
 
+pub fn create_mouse_cursor_window(app: &Application, config: &Config) -> Result<ApplicationWindow> {
+    let window = ApplicationWindow::builder()
+        .application(app)
+        .decorated(false)
+        .resizable(false)
+        .build();
+
+    window.init_layer_shell();
+
+    window.set_layer(Layer::Overlay);
+
+    window.set_namespace("hibiki-mouse");
+
+    window.set_keyboard_mode(gtk4_layer_shell::KeyboardMode::None);
+
+    // Anchor to same position as keystroke window
+    for (edge, anchor) in config.position.layer_shell_edges() {
+        window.set_anchor(edge, anchor);
+    }
+
+    // Offset mouse bubbles 70px UP from keystroke window based on anchor position
+    let vertical_offset = config.position.vertical_offset_direction();
+    let top_margin = if let Some((Edge::Top, dir)) = vertical_offset {
+        config.margin + (dir * 70)
+    } else {
+        config.margin
+    };
+    let bottom_margin = if let Some((Edge::Bottom, dir)) = vertical_offset {
+        config.margin + (dir * 70)
+    } else {
+        config.margin
+    };
+
+    window.set_margin(Edge::Top, top_margin);
+    window.set_margin(Edge::Bottom, bottom_margin);
+    window.set_margin(Edge::Left, config.margin);
+    window.set_margin(Edge::Right, config.margin);
+
+    window.set_exclusive_zone(0);
+
+    window.add_css_class("mouse-cursor-window");
+
+    info!("Created mouse cursor window");
+
+    Ok(window)
+}
+
+pub fn update_mouse_window_position(window: &ApplicationWindow, x: i32, y: i32, offset_x: i32, offset_y: i32) {
+    let display = gtk4::prelude::WidgetExt::display(window);
+
+    if let Some(surface) = window.surface() {
+        if let Some(monitor) = display.monitor_at_surface(&surface) {
+            let geometry = monitor.geometry();
+
+            let rel_x = x - geometry.x();
+            let rel_y = y - geometry.y();
+
+            let margin_left = rel_x + offset_x;
+            let margin_top = rel_y + offset_y;
+
+            window.set_margin(Edge::Left, margin_left.max(0));
+            window.set_margin(Edge::Top, margin_top.max(0));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

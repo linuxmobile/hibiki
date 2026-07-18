@@ -93,6 +93,24 @@ impl Position {
             ],
         }
     }
+
+    /// Returns which vertical edge is anchored and whether offset should be positive or negative
+    /// to move the window UP (for positioning mouse bubbles above keystroke display)
+    #[must_use]
+    pub fn vertical_offset_direction(self) -> Option<(Edge, i32)> {
+        match self {
+            // Top positions: anchored to TOP, subtract to move UP
+            Position::TopLeft | Position::TopCenter | Position::TopRight => {
+                Some((Edge::Top, -1))
+            }
+            // Bottom positions: anchored to BOTTOM, add to move UP
+            Position::BottomLeft | Position::BottomCenter | Position::BottomRight => {
+                Some((Edge::Bottom, 1))
+            }
+            // Center positions: not vertically anchored, can't easily offset
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

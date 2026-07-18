@@ -46,6 +46,7 @@ impl KeyDisplayWidget {
             .build();
 
         container.add_css_class("keystroke-container");
+        container.set_margin_top(25);
 
         let logo_texture = Self::load_logo_texture();
 
@@ -117,8 +118,13 @@ impl KeyDisplayWidget {
         if is_modifier(key.key) {
             self.held_modifiers.insert(key.key);
 
+            // Show modifiers when held alone
+            self.update_modifier_display();
             return;
         }
+
+        // Remove any modifier-only display since we're now showing a combo
+        self.remove_modifier_only_display();
 
         let current_combo = self.get_current_combo(key.key);
         if let Some(existing) = self
@@ -226,6 +232,8 @@ impl KeyDisplayWidget {
 
         if is_modifier(key.key) {
             self.held_modifiers.remove(&key.key);
+            // Update modifier display when a modifier is released
+            self.update_modifier_display();
         }
 
         for displayed in self.displayed_keys.iter_mut() {
@@ -286,5 +294,51 @@ impl KeyDisplayWidget {
     #[allow(dead_code)]
     pub fn has_keys(&self) -> bool {
         !self.displayed_keys.is_empty()
+    }
+
+    fn update_modifier_display(&mut self) {
+        // Remove existing modifier-only display
+        self.remove_modifier_only_display();
+
+        // If we have held modifiers and no non-modifier keys are held, show them
+        if !self.held_modifiers.is_empty() && self.held_keys.iter().all(|k| is_modifier(*k)) {
+            let mut modifier_combo: Vec<Key> = self.held_modifiers.iter().copied().collect();
+            modifier_combo.sort_by_key(|k| match *k {
+                Key::KEY_LEFTCTRL | Key::KEY_RIGHTCTRL => 0,
+                Key::KEY_LEFTALT | Key::KEY_RIGHTALT => 1,
+                Key::KEY_LEFTSHIFT | Key::KEY_RIGHTSHIFT => 2,
+                Key::KEY_LEFTMETA | Key::KEY_RIGHTMETA => 3,
+                _ => 4,
+            });
+
+            let widget = self.create_combo_widget(&modifier_combo);
+            self.container.append(&widget);
+
+            let displayed = DisplayedKey {
+                keys: modifier_combo,
+                last_active: Instant::now(),
+                is_held: true,
+                widget,
+            };
+
+            self.displayed_keys.push_back(displayed);
+        }
+    }
+
+    fn remove_modifier_only_display(&mut self) {
+        // Remove any display entry that contains only modifiers
+        let modifier_only_indices: Vec<usize> = self
+            .displayed_keys
+            .iter()
+            .enumerate()
+            .filter(|(_, dk)| dk.keys.iter().all(|k| is_modifier(*k)))
+            .map(|(i, _)| i)
+            .collect();
+
+        for &i in modifier_only_indices.iter().rev() {
+            if let Some(removed) = self.displayed_keys.remove(i) {
+                self.container.remove(&removed.widget);
+            }
+        }
     }
 }
