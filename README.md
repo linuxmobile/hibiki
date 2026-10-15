@@ -20,10 +20,12 @@ And yes, it's written in Rust, so you already know it's blazing fast and memory-
 - **Modern Configuration**:
   - Configuration migrated to `config.toml` (auto-migrates from old JSON).
   - **Granular Typography**: Customize font family, weight, and size per mode.
+  - **Custom Colors**: Theme the background and text of keys and bubbles.
   - **Virtualization**: Optimized Settings UI handles large lists of fonts and sound packs with zero lag.
 - **System Integration**:
   - **GTK Theme Support**: Automatically respects your system theme.
   - **System Tray**: Quick access to toggle modes, pause capture, or open settings.
+  - **CLI Control**: Toggle modes from compositor keybindings (`hibiki --keystroke-toggle`).
   - **Draggable**: Visualizer windows can be repositioned easily.
 
 ## Supported Compositors
@@ -73,6 +75,51 @@ nix build github:linuxmobile/hibiki
 
 # Develop
 nix develop
+```
+
+## Configuration
+
+Hibiki reads its configuration from `~/.config/hibiki/config.toml`. Beyond
+typography and behavior, every mode can be themed with custom colors:
+
+```toml
+# Keystroke mode
+background = "#1e1e2e"   # key bubble background (omit for theme default)
+foreground = "#cdd6f4"   # key label color (omit for theme default)
+
+[bubble]
+background = "#181825"   # bubble background
+foreground = "#cdd6f4"   # bubble text color
+```
+
+Colors accept hex (`#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`) or
+`rgb()`/`rgba()` notation. When `background`/`foreground` are omitted, the
+active GTK theme is used, so light/dark switching keeps working. The same
+options are available in the **Settings → Colors** section of the UI.
+
+## Control from the compositor (CLI)
+
+Hibiki ships a small CLI that talks to the running instance, so modes can be
+toggled without touching the tray or settings window:
+
+```bash
+hibiki --keystroke-toggle   # switch to keystroke mode (alias: --keystroke, -k)
+hibiki --bubble-toggle      # switch to bubble mode    (alias: --bubble, -b)
+hibiki --toggle             # toggle between the two modes (-t)
+hibiki --pause-toggle       # pause/resume capture      (-p)
+hibiki --settings           # open settings
+hibiki --launcher           # bring the launcher back up
+hibiki --quit               # quit the running instance
+```
+
+All commands are forwarded to an already-running instance over D-Bus; if none
+is running, the first command also starts Hibiki. This makes them ideal for
+compositor keybindings. For example, on Hyprland:
+
+```ini
+bind = SUPER, K, exec, hibiki --keystroke-toggle
+bind = SUPER, B, exec, hibiki --bubble-toggle
+bind = SUPER, P, exec, hibiki --pause-toggle
 ```
 
 ## Contributing & Help Needed

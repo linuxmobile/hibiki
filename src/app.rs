@@ -9,13 +9,14 @@ use crate::infrastructure::audio::SoundPackLoader;
 use crate::input::{
     InputControlCommand, KeyEvent, KeyListener, LayoutManager, ListenerConfig, ListenerHandle,
 };
-use crate::tray::{TrayAction, TrayHandle};
+use crate::tray::{AppAction, TrayHandle};
 use crate::ui::{
     create_bubble_window, create_launcher_window, create_settings_window, create_window,
     setup_drag, show_launcher, show_settings, BubbleDisplayWidget, DisplayMode, KeyDisplayWidget,
 };
 use anyhow::Result;
 use async_channel::{bounded, Receiver};
+use gtk4::gio;
 use gtk4::glib::{self, ControlFlow};
 use gtk4::prelude::*;
 use gtk4::{Application, ApplicationWindow, CssProvider};
@@ -34,6 +35,13 @@ pub struct App {
     #[allow(dead_code)]
     audio_engine: Arc<Mutex<Option<AudioEngine>>>,
     audio_dispatcher: Option<AudioDispatcher>,
+    /// Filled in by `activate`/`activate_without_tray` so that CLI commands
+    /// forwarded to an already-running instance (or handled on first launch)
+    /// can reach the live runtime state.
+    state_slot: Rc<RefCell<Option<Rc<RefCell<RuntimeState>>>>>,
+    /// Set once the system tray is up. CLI commands use it to keep the tray
+    /// icon in sync (e.g. pause state).
+    tray_slot: Rc<RefCell<Option<TrayHandle>>>,
 }
 
 #[derive(Default)]
@@ -59,7 +67,10 @@ impl App {
     pub fn new(config_service: ConfigService, no_ui: bool) -> Self {
         let gtk_app = Application::builder()
             .application_id("dev.linuxmobile.hibiki")
+            .flags(gio::ApplicationFlags::HANDLES_COMMAND_LINE)
             .build();
+
+        register_cli_options(&gtk_app);
 
         let (audio_engine, audio_dispatcher) = match AudioEngine::new() {
             Ok((e, d)) => (Some(e), Some(d)),
@@ -69,22 +80,59 @@ impl App {
             }
         };
 
+        let state_slot: Rc<RefCell<Option<Rc<RefCell<RuntimeState>>>>> =
+            Rc::new(RefCell::new(None));
+        let tray_slot: Rc<RefCell<Option<TrayHandle>>> = Rc::new(RefCell::new(None));
+
+        let command_service = config_service.clone();
+        let command_state = Rc::clone(&state_slot);
+        let command_tray = Rc::clone(&tray_slot);
+        gtk_app.connect_command_line(move |app, cmdline| {
+            handle_command_line(
+                app,
+                cmdline,
+                &command_state,
+                &command_tray,
+                &command_service,
+                no_ui,
+            )
+        });
+
         Self {
             gtk_app,
             config_service,
             no_ui,
             audio_engine: Arc::new(Mutex::new(audio_engine)),
             audio_dispatcher,
+            state_slot,
+            tray_slot,
         }
     }
 
+    /// Register with the session bus and report whether another instance
+    /// already owns the application id.
+    ///
+    /// Primary instances start the system tray; secondary invocations only
+    /// forward their command line to the primary and exit.
     #[must_use]
-    pub fn run_with_tray(self, tray_rx: Receiver<TrayAction>, tray_handle: TrayHandle) -> i32 {
+    pub fn is_remote(&self) -> bool {
+        if let Err(e) = self.gtk_app.register(gtk4::gio::Cancellable::NONE) {
+            debug!("Could not register application with the session bus: {}", e);
+        }
+        self.gtk_app.is_remote()
+    }
+
+    #[must_use]
+    pub fn run_with_tray(self, tray_rx: Receiver<AppAction>, tray_handle: TrayHandle) -> i32 {
         let config_service = self.config_service.clone();
         let audio_dispatcher = self.audio_dispatcher.clone();
         let audio_engine_container = self.audio_engine.clone();
         let no_ui = self.no_ui;
+        let state_slot = self.state_slot.clone();
 
+        *self.tray_slot.borrow_mut() = Some(tray_handle.clone());
+
+        let state_slot_activate = Rc::clone(&state_slot);
         self.gtk_app.connect_activate(move |app| {
             let audio_engine = audio_engine_container.lock().take();
             activate(
@@ -95,12 +143,11 @@ impl App {
                 audio_dispatcher.clone(),
                 audio_engine,
                 no_ui,
+                &state_slot_activate,
             );
         });
 
-        let exit_code = self.gtk_app.run_with_args::<&str>(&[]);
-
-        exit_code.into()
+        self.gtk_app.run().into()
     }
 
     #[must_use]
@@ -109,7 +156,9 @@ impl App {
         let audio_dispatcher = self.audio_dispatcher.clone();
         let audio_engine_container = self.audio_engine.clone();
         let no_ui = self.no_ui;
+        let state_slot = self.state_slot.clone();
 
+        let state_slot_activate = Rc::clone(&state_slot);
         self.gtk_app.connect_activate(move |app| {
             let audio_engine = audio_engine_container.lock().take();
             activate_without_tray(
@@ -118,22 +167,155 @@ impl App {
                 audio_dispatcher.clone(),
                 audio_engine,
                 no_ui,
+                &state_slot_activate,
             );
         });
 
-        let exit_code = self.gtk_app.run_with_args::<&str>(&[]);
-
-        exit_code.into()
+        self.gtk_app.run().into()
     }
 }
 
-#[allow(clippy::needless_pass_by_value)]
+/// Register the CLI flags with `GApplication` so they can be parsed locally and
+/// forwarded to an already-running instance.
+fn register_cli_options(app: &Application) {
+    let none = glib::Char(0);
+    let entries: [(&str, glib::Char, &str); 10] = [
+        (
+            "keystroke-toggle",
+            glib::Char::from(b'k'),
+            "Switch to keystroke mode",
+        ),
+        ("keystroke", none, "Switch to keystroke mode"),
+        (
+            "bubble-toggle",
+            glib::Char::from(b'b'),
+            "Switch to bubble mode",
+        ),
+        ("bubble", none, "Switch to bubble mode"),
+        (
+            "toggle",
+            glib::Char::from(b't'),
+            "Toggle between keystroke and bubble mode",
+        ),
+        (
+            "pause-toggle",
+            glib::Char::from(b'p'),
+            "Pause or resume key capture",
+        ),
+        ("settings", none, "Open the settings window"),
+        ("launcher", none, "Show the launcher window"),
+        ("quit", none, "Quit the running instance"),
+        (
+            "no-ui",
+            glib::Char::from(b'n'),
+            "Skip the launcher on startup",
+        ),
+    ];
+
+    for (long_name, short_name, description) in entries {
+        app.add_main_option(
+            long_name,
+            short_name,
+            glib::OptionFlags::NONE,
+            glib::OptionArg::None,
+            description,
+            None,
+        );
+    }
+}
+
+/// Translate the parsed CLI options into runtime actions.
+///
+/// `GApplication` parses the registered options and forwards them to the
+/// primary instance through [`gio::ApplicationCommandLine::options_dict`].
+fn actions_from_options(cmdline: &gio::ApplicationCommandLine) -> Vec<AppAction> {
+    let options = cmdline.options_dict();
+    actions_from_flags(|key| options.contains(key))
+}
+
+fn actions_from_flags(is_set: impl Fn(&str) -> bool) -> Vec<AppAction> {
+    let mut actions = Vec::new();
+
+    if is_set("keystroke-toggle") || is_set("keystroke") {
+        actions.push(AppAction::KeystrokeMode);
+    }
+    if is_set("bubble-toggle") || is_set("bubble") {
+        actions.push(AppAction::BubbleMode);
+    }
+    if is_set("toggle") {
+        actions.push(AppAction::ToggleMode);
+    }
+    if is_set("pause-toggle") {
+        actions.push(AppAction::TogglePause);
+    }
+    if is_set("settings") {
+        actions.push(AppAction::OpenSettings);
+    }
+    if is_set("launcher") {
+        actions.push(AppAction::ShowLauncher);
+    }
+    if is_set("quit") {
+        actions.push(AppAction::Quit);
+    }
+
+    actions
+}
+
+fn handle_command_line(
+    app: &Application,
+    cmdline: &gio::ApplicationCommandLine,
+    state_slot: &Rc<RefCell<Option<Rc<RefCell<RuntimeState>>>>>,
+    tray_slot: &Rc<RefCell<Option<TrayHandle>>>,
+    config_service: &ConfigService,
+    no_ui: bool,
+) -> i32 {
+    let actions = actions_from_options(cmdline);
+    let is_remote = cmdline.is_remote();
+
+    debug!(
+        "Command line received: remote={}, actions={:?}",
+        is_remote, actions
+    );
+
+    if state_slot.borrow().is_none() {
+        app.activate();
+    }
+
+    let state = state_slot.borrow().clone();
+    let Some(state) = state else {
+        return 0;
+    };
+
+    let tray = tray_slot.borrow().clone();
+
+    if actions.is_empty() {
+        if is_remote && !no_ui {
+            handle_app_action(
+                &AppAction::ShowLauncher,
+                &state,
+                config_service,
+                app,
+                tray.as_ref(),
+            );
+        }
+        return 0;
+    }
+
+    for action in actions {
+        handle_app_action(&action, &state, config_service, app, tray.as_ref());
+    }
+
+    0
+}
+
+#[allow(clippy::too_many_arguments)]
 fn activate_without_tray(
     app: &Application,
     config_service: &ConfigService,
     audio_dispatcher: Option<AudioDispatcher>,
     audio_engine: Option<AudioEngine>,
     no_ui: bool,
+    state_slot: &Rc<RefCell<Option<Rc<RefCell<RuntimeState>>>>>,
 ) {
     info!("Activating keystroke application (no tray)");
 
@@ -159,16 +341,20 @@ fn activate_without_tray(
     state.borrow_mut().css_provider = Some(css_provider);
 
     setup_launcher_and_modes(app, &state, config_service.clone(), no_ui);
+
+    *state_slot.borrow_mut() = Some(Rc::clone(&state));
 }
 
+#[allow(clippy::too_many_arguments)]
 fn activate(
     app: &Application,
     config_service: &ConfigService,
-    tray_rx: Receiver<TrayAction>,
+    tray_rx: Receiver<AppAction>,
     tray_handle: TrayHandle,
     audio_dispatcher: Option<AudioDispatcher>,
     audio_engine: Option<AudioEngine>,
     no_ui: bool,
+    state_slot: &Rc<RefCell<Option<Rc<RefCell<RuntimeState>>>>>,
 ) {
     info!("Activating keystroke application");
 
@@ -202,6 +388,8 @@ fn activate(
         tray_rx,
         tray_handle,
     );
+
+    *state_slot.borrow_mut() = Some(state);
 }
 
 fn setup_launcher_and_modes(
@@ -250,7 +438,17 @@ fn switch_mode(
     config_service: &ConfigService,
     mode: DisplayMode,
 ) {
+    debug!("Switching to {:?} mode", mode);
     close_mode_windows(state);
+
+    if let Some(launcher) = &state.borrow().launcher_window {
+        launcher.set_visible(false);
+    }
+
+    let config = config_service.get_config();
+    if let Some(provider) = &state.borrow().css_provider {
+        crate::ui::update_css_provider(provider, &config);
+    }
 
     state.borrow_mut().mode = Some(mode);
 
@@ -299,7 +497,7 @@ fn setup_tray_handling(
     state: Rc<RefCell<RuntimeState>>,
     config_service: ConfigService,
     app: Application,
-    tray_rx: Receiver<TrayAction>,
+    tray_rx: Receiver<AppAction>,
     tray_handle: TrayHandle,
 ) {
     let tray_handle = Arc::new(tray_handle);
@@ -328,7 +526,13 @@ fn setup_tray_handling(
     let tray_handle_a = Arc::clone(&tray_handle);
     glib::MainContext::default().spawn_local(async move {
         while let Ok(action) = tray_rx.recv().await {
-            handle_tray_action(&action, &state, &config_service, &app, &tray_handle_a);
+            handle_app_action(
+                &action,
+                &state,
+                &config_service,
+                &app,
+                Some(tray_handle_a.as_ref()),
+            );
         }
         debug!("Tray event loop terminated");
     });
@@ -358,33 +562,44 @@ fn update_tray_icon(
     }
 }
 
-fn handle_tray_action(
-    action: &TrayAction,
+fn handle_app_action(
+    action: &AppAction,
     state: &Rc<RefCell<RuntimeState>>,
     config_service: &ConfigService,
     app: &Application,
-    tray_handle: &Arc<TrayHandle>,
+    tray_handle: Option<&TrayHandle>,
 ) {
     match action {
-        TrayAction::ShowLauncher => {
+        AppAction::ShowLauncher => {
             debug!("Handling ShowLauncher action");
             if let Some(launcher) = &state.borrow().launcher_window {
                 show_launcher(launcher);
             }
         }
-        TrayAction::KeystrokeMode => {
+        AppAction::KeystrokeMode => {
             debug!("Handling KeystrokeMode action");
             switch_mode(app, state, config_service, DisplayMode::Keystroke);
         }
-        TrayAction::BubbleMode => {
+        AppAction::BubbleMode => {
             debug!("Handling BubbleMode action");
             switch_mode(app, state, config_service, DisplayMode::Bubble);
         }
-        TrayAction::OpenSettings => {
+        AppAction::ToggleMode => {
+            let target = match state.borrow().mode {
+                Some(DisplayMode::Keystroke) => DisplayMode::Bubble,
+                _ => DisplayMode::Keystroke,
+            };
+            debug!("Handling ToggleMode action -> {:?}", target);
+            switch_mode(app, state, config_service, target);
+        }
+        AppAction::OpenSettings => {
             debug!("Handling OpenSettings action");
+            if let Some(launcher) = &state.borrow().launcher_window {
+                launcher.set_visible(false);
+            }
             open_settings(app, state, config_service.clone());
         }
-        TrayAction::TogglePause => {
+        AppAction::TogglePause => {
             debug!("Handling TogglePause action");
             let mut s = state.borrow_mut();
             let new_state = s.routing_engine.toggle_capture();
@@ -408,13 +623,15 @@ fn handle_tray_action(
                 service.handle_state_change(new_state, s.routing_engine.get_states().1);
             }
             drop(s);
-            tray_handle.set_paused(paused);
+            if let Some(handle) = tray_handle {
+                handle.set_paused(paused);
+            }
             info!(
                 "Keystroke capture {}",
                 if paused { "paused" } else { "resumed" }
             );
         }
-        TrayAction::Quit => {
+        AppAction::Quit => {
             debug!("Handling Quit action");
             app.quit();
         }
@@ -1072,4 +1289,48 @@ fn load_css_defaults() -> CssProvider {
     }
 
     provider
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    fn actions(flags: &[&str]) -> Vec<AppAction> {
+        let set: HashSet<&str> = flags.iter().copied().collect();
+        actions_from_flags(|key| set.contains(key))
+    }
+
+    #[test]
+    fn test_cli_no_flags_has_no_actions() {
+        assert!(actions(&[]).is_empty());
+    }
+
+    #[test]
+    fn test_cli_mode_switches() {
+        assert_eq!(
+            actions(&["keystroke-toggle"]),
+            vec![AppAction::KeystrokeMode]
+        );
+        assert_eq!(actions(&["keystroke"]), vec![AppAction::KeystrokeMode]);
+        assert_eq!(actions(&["bubble-toggle"]), vec![AppAction::BubbleMode]);
+        assert_eq!(actions(&["bubble"]), vec![AppAction::BubbleMode]);
+        assert_eq!(actions(&["toggle"]), vec![AppAction::ToggleMode]);
+    }
+
+    #[test]
+    fn test_cli_control_flags() {
+        assert_eq!(actions(&["pause-toggle"]), vec![AppAction::TogglePause]);
+        assert_eq!(actions(&["settings"]), vec![AppAction::OpenSettings]);
+        assert_eq!(actions(&["launcher"]), vec![AppAction::ShowLauncher]);
+        assert_eq!(actions(&["quit"]), vec![AppAction::Quit]);
+    }
+
+    #[test]
+    fn test_cli_multiple_flags_preserve_order() {
+        assert_eq!(
+            actions(&["settings", "pause-toggle"]),
+            vec![AppAction::TogglePause, AppAction::OpenSettings]
+        );
+    }
 }

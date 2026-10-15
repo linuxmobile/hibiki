@@ -2,10 +2,20 @@ use crate::compositor::{
     self, hyprland::HyprlandClient, niri::NiriClient, sway::SwayClient, umbriel::UmbrielClient,
     Compositor, CompositorClient, KeyboardLayouts, LayoutEvent,
 };
-use std::io::{BufRead, Read};
+use std::io::{BufRead, ErrorKind, Read};
 use std::sync::{Arc, RwLock};
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 use tracing::{debug, info, warn};
+
+/// How long a listener blocks on its compositor socket before re-checking the
+/// stop flag. Keeps mode switches (tray/CLI) responsive instead of hanging on a
+/// read that never returns.
+const LISTENER_POLL_INTERVAL: Duration = Duration::from_millis(250);
+
+fn is_timeout(error: &std::io::Error) -> bool {
+    matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut)
+}
 
 #[allow(dead_code)]
 pub struct LayoutManager {
@@ -184,6 +194,10 @@ impl LayoutManager {
             }
         };
 
+        let _ = reader
+            .get_ref()
+            .set_read_timeout(Some(LISTENER_POLL_INTERVAL));
+
         for line in reader.lines() {
             if stop_flag.load(std::sync::atomic::Ordering::SeqCst) {
                 break;
@@ -191,6 +205,7 @@ impl LayoutManager {
 
             let line = match line {
                 Ok(l) => l,
+                Err(e) if is_timeout(&e) => continue,
                 Err(e) => {
                     debug!("Error reading Niri event: {}", e);
                     break;
@@ -237,6 +252,10 @@ impl LayoutManager {
             }
         };
 
+        let _ = reader
+            .get_ref()
+            .set_read_timeout(Some(LISTENER_POLL_INTERVAL));
+
         for line in reader.lines() {
             if stop_flag.load(std::sync::atomic::Ordering::SeqCst) {
                 break;
@@ -244,6 +263,7 @@ impl LayoutManager {
 
             let line = match line {
                 Ok(l) => l,
+                Err(e) if is_timeout(&e) => continue,
                 Err(e) => {
                     debug!("Error reading Hyprland event: {}", e);
                     break;
@@ -305,6 +325,7 @@ impl LayoutManager {
             }
         };
 
+        let _ = stream.set_read_timeout(Some(LISTENER_POLL_INTERVAL));
         let mut reader = std::io::BufReader::new(stream);
 
         loop {
@@ -313,8 +334,10 @@ impl LayoutManager {
             }
 
             let mut header = [0u8; 14];
-            if reader.read_exact(&mut header).is_err() {
-                break;
+            match reader.read_exact(&mut header) {
+                Ok(()) => {}
+                Err(e) if is_timeout(&e) => continue,
+                Err(_) => break,
             }
 
             if &header[0..6] != b"i3-ipc" {
@@ -380,6 +403,10 @@ impl LayoutManager {
             }
         };
 
+        let _ = reader
+            .get_ref()
+            .set_read_timeout(Some(LISTENER_POLL_INTERVAL));
+
         for line in reader.lines() {
             if stop_flag.load(std::sync::atomic::Ordering::SeqCst) {
                 break;
@@ -387,6 +414,7 @@ impl LayoutManager {
 
             let line = match line {
                 Ok(l) => l,
+                Err(e) if is_timeout(&e) => continue,
                 Err(e) => {
                     debug!("Error reading Umbriel event: {}", e);
                     break;

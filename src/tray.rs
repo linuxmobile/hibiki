@@ -4,11 +4,12 @@ use parking_lot::Mutex;
 use std::sync::Arc;
 use tracing::{debug, error, info};
 
-#[derive(Debug, Clone)]
-pub enum TrayAction {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AppAction {
     ShowLauncher,
     KeystrokeMode,
     BubbleMode,
+    ToggleMode,
     OpenSettings,
     TogglePause,
     Quit,
@@ -29,7 +30,7 @@ impl Default for TrayState {
 }
 
 struct KeystrokeTray {
-    action_sender: Sender<TrayAction>,
+    action_sender: Sender<AppAction>,
     state: Arc<Mutex<TrayState>>,
 }
 
@@ -116,7 +117,7 @@ impl Tray for KeystrokeTray {
 
     fn activate(&mut self, _x: i32, _y: i32) {
         debug!("Tray left-clicked: showing launcher");
-        if let Err(e) = self.action_sender.send_blocking(TrayAction::ShowLauncher) {
+        if let Err(e) = self.action_sender.send_blocking(AppAction::ShowLauncher) {
             error!("Failed to send tray action: {}", e);
         }
     }
@@ -133,7 +134,7 @@ impl Tray for KeystrokeTray {
                 label: "Keystroke Mode".to_string(),
                 activate: Box::new(|tray: &mut Self| {
                     debug!("Tray: Keystroke mode selected");
-                    let _ = tray.action_sender.send_blocking(TrayAction::KeystrokeMode);
+                    let _ = tray.action_sender.send_blocking(AppAction::KeystrokeMode);
                 }),
                 ..Default::default()
             }),
@@ -141,7 +142,7 @@ impl Tray for KeystrokeTray {
                 label: "Bubble Mode".to_string(),
                 activate: Box::new(|tray: &mut Self| {
                     debug!("Tray: Bubble mode selected");
-                    let _ = tray.action_sender.send_blocking(TrayAction::BubbleMode);
+                    let _ = tray.action_sender.send_blocking(AppAction::BubbleMode);
                 }),
                 ..Default::default()
             }),
@@ -150,7 +151,7 @@ impl Tray for KeystrokeTray {
                 label: "Settings".to_string(),
                 activate: Box::new(|tray: &mut Self| {
                     debug!("Tray: Settings selected");
-                    let _ = tray.action_sender.send_blocking(TrayAction::OpenSettings);
+                    let _ = tray.action_sender.send_blocking(AppAction::OpenSettings);
                 }),
                 ..Default::default()
             }),
@@ -158,7 +159,7 @@ impl Tray for KeystrokeTray {
                 label: pause_label.to_string(),
                 activate: Box::new(|tray: &mut Self| {
                     debug!("Tray: Toggle pause selected");
-                    let _ = tray.action_sender.send_blocking(TrayAction::TogglePause);
+                    let _ = tray.action_sender.send_blocking(AppAction::TogglePause);
                 }),
                 ..Default::default()
             }),
@@ -167,7 +168,7 @@ impl Tray for KeystrokeTray {
                 label: "Quit".to_string(),
                 activate: Box::new(|tray: &mut Self| {
                     debug!("Tray: Quit selected");
-                    let _ = tray.action_sender.send_blocking(TrayAction::Quit);
+                    let _ = tray.action_sender.send_blocking(AppAction::Quit);
                 }),
                 ..Default::default()
             }),
@@ -196,7 +197,7 @@ impl TrayHandle {
     }
 }
 
-pub fn start_tray() -> anyhow::Result<(async_channel::Receiver<TrayAction>, TrayHandle)> {
+pub fn start_tray() -> anyhow::Result<(async_channel::Receiver<AppAction>, TrayHandle)> {
     let (sender, receiver) = async_channel::bounded(32);
     let state = Arc::new(Mutex::new(TrayState::default()));
 

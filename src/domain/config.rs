@@ -126,6 +126,12 @@ pub struct BubbleConfig {
     pub font_family: String,
     pub font_size: f64,
     pub color: String,
+    /// Optional custom bubble background (any CSS color, e.g. `#1e1e2e`).
+    /// When `None`, the theme background is used.
+    pub background: Option<String>,
+    /// Optional custom bubble text color (e.g. `#cdd6f4`).
+    /// When `None`, the theme foreground is used.
+    pub foreground: Option<String>,
     pub audio: AudioConfig,
     pub position: Position,
     pub draggable: bool,
@@ -153,6 +159,8 @@ impl Default for BubbleConfig {
             font_family: "Sans".to_string(),
             font_size: 1.0,
             color: "#3584e4".to_string(),
+            background: None,
+            foreground: None,
             audio: AudioConfig::default(),
             position: Position::TopRight,
             draggable: false,
@@ -212,6 +220,14 @@ pub struct KeystrokeConfig {
     pub font_size: f64,
 
     pub keystroke_theme: String,
+
+    /// Optional custom key background (any CSS color, e.g. `#1e1e2e`).
+    /// When `None`, the theme background is used.
+    pub background: Option<String>,
+
+    /// Optional custom key text color (e.g. `#cdd6f4`).
+    /// When `None`, the theme foreground is used.
+    pub foreground: Option<String>,
 
     pub keystroke_draggable: bool,
 
@@ -274,6 +290,8 @@ impl Default for KeystrokeConfig {
             font_family: "Sans".to_string(),
             font_size: 1.2,
             keystroke_theme: "system".to_string(),
+            background: None,
+            foreground: None,
             keystroke_draggable: false,
             keystroke_hotkey: "<Shift><Control>k".to_string(),
             pause_hotkey: "<Control>p".to_string(),
@@ -330,6 +348,37 @@ mod tests {
         assert_eq!(config.timeout_ms, 30000);
         assert_eq!(config.opacity, 0.0);
         assert_eq!(config.corner_radius, 0.0);
+    }
+
+    #[test]
+    fn test_color_config_defaults_to_auto() {
+        let config = KeystrokeConfig::default();
+        assert!(config.background.is_none());
+        assert!(config.foreground.is_none());
+        assert!(config.bubble.background.is_none());
+        assert!(config.bubble.foreground.is_none());
+    }
+
+    #[test]
+    fn test_color_config_toml_roundtrip() {
+        let config = KeystrokeConfig {
+            background: Some("#1e1e2e".to_string()),
+            foreground: Some("#cdd6f4".to_string()),
+            bubble: BubbleConfig {
+                background: Some("#181825".to_string()),
+                foreground: Some("#cdd6f4".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let toml = toml::to_string_pretty(&config).unwrap();
+        let parsed: KeystrokeConfig = toml::from_str(&toml).unwrap();
+
+        assert_eq!(parsed.background.as_deref(), Some("#1e1e2e"));
+        assert_eq!(parsed.foreground.as_deref(), Some("#cdd6f4"));
+        assert_eq!(parsed.bubble.background.as_deref(), Some("#181825"));
+        assert_eq!(parsed.bubble.foreground.as_deref(), Some("#cdd6f4"));
     }
 
     #[test]

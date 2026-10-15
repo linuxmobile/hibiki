@@ -14,8 +14,8 @@
 }}
 
 .keystroke-key {{
-    background-color: alpha(@theme_bg_color, {keystroke_opacity});
-    color: @card_fg_color;
+    background-color: {keystroke_background};
+    color: {keystroke_foreground};
     border-radius: {keystroke_border_radius};
     padding: 10px 16px;
     margin: 4px;
@@ -33,8 +33,8 @@
 }}
 
 .keystroke-key.modifier {{
-    background-color: alpha(@accent_bg_color, {keystroke_opacity});
-    color: @accent_fg_color;
+    background-color: {keystroke_modifier_background};
+    color: {keystroke_modifier_foreground};
 }}
 
 .keystroke-key.fading {{
@@ -82,8 +82,8 @@
 }}
 
 .bubble {{
-    background-color: alpha(@theme_bg_color, {bubble_opacity});
-    color: @card_fg_color;
+    background-color: {bubble_background};
+    color: {bubble_foreground};
     border-radius: {bubble_border_radius};
     padding: 10px 16px;
     margin: 4px 0;

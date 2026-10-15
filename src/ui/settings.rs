@@ -1,15 +1,16 @@
 use crate::application::config_service::ConfigService;
 use crate::application::typography_service::TypographyService;
-use crate::domain::config::{AudioConfig, Position};
+use crate::domain::config::{AudioConfig, KeystrokeConfig, Position};
 use crate::infrastructure::audio::SoundPackLoader;
 use gtk4::prelude::*;
 use gtk4::{
-    glib, Adjustment, Align, Application, ApplicationWindow, Box as GtkBox, Button, CustomFilter,
-    EventControllerKey, FilterListModel, Grid, Label, ListItemFactory, ListScrollFlags, ListView,
-    Orientation, Overflow, Scale, ScrolledWindow, SearchEntry, SelectionModel,
-    SignalListItemFactory, SingleSelection, Stack, StringList, Switch, ToggleButton,
+    glib, Adjustment, Align, Application, ApplicationWindow, Box as GtkBox, Button, ColorDialog,
+    ColorDialogButton, CustomFilter, EventControllerKey, FilterListModel, Grid, Label,
+    ListItemFactory, ListScrollFlags, ListView, Orientation, Overflow, Scale, ScrolledWindow,
+    SearchEntry, SelectionModel, SignalListItemFactory, SingleSelection, Stack, StringList, Switch,
+    ToggleButton,
 };
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -458,6 +459,183 @@ fn create_position_section(
     pos_section
 }
 
+/// Convert a GDK color to a `#rrggbb`/`#rrggbbaa` string understood by the CSS
+/// generator.
+fn rgba_to_hex(color: &gtk4::gdk::RGBA) -> String {
+    let channel = |v: f32| (v * 255.0).round() as u8;
+    let (r, g, b, a) = (
+        channel(color.red()),
+        channel(color.green()),
+        channel(color.blue()),
+        channel(color.alpha()),
+    );
+    if a == 255 {
+        format!("#{r:02x}{g:02x}{b:02x}")
+    } else {
+        format!("#{r:02x}{g:02x}{b:02x}{a:02x}")
+    }
+}
+
+fn parse_color(value: &str, fallback: gtk4::gdk::RGBA) -> gtk4::gdk::RGBA {
+    gtk4::gdk::RGBA::parse(value).unwrap_or(fallback)
+}
+
+#[allow(deprecated)]
+fn resolve_theme_color(widget: &impl IsA<gtk4::Widget>, name: &str) -> Option<gtk4::gdk::RGBA> {
+    widget.style_context().lookup_color(name)
+}
+
+fn set_color_value(
+    config: &mut KeystrokeConfig,
+    is_bubble: bool,
+    is_background: bool,
+    value: Option<String>,
+) {
+    match (is_bubble, is_background) {
+        (true, true) => config.bubble.background = value,
+        (true, false) => config.bubble.foreground = value,
+        (false, true) => config.background = value,
+        (false, false) => config.foreground = value,
+    }
+}
+
+fn create_color_row(
+    title: &str,
+    current: Option<String>,
+    config_service: &ConfigService,
+    is_bubble: bool,
+    is_background: bool,
+    theme_color: gtk4::gdk::RGBA,
+) -> GtkBox {
+    let row = GtkBox::new(Orientation::Horizontal, 12);
+    row.add_css_class("settings-element");
+
+    let label = Label::builder()
+        .label(title)
+        .hexpand(true)
+        .xalign(0.0)
+        .build();
+    row.append(&label);
+
+    let value_label = Label::builder()
+        .label(current.clone().unwrap_or_else(|| "Auto".to_string()))
+        .css_classes(vec!["caption", "dim-label"])
+        .build();
+    row.append(&value_label);
+
+    let fallback = theme_color;
+    let initial = current
+        .as_deref()
+        .map_or(fallback, |c| parse_color(c, fallback));
+
+    let dialog = ColorDialog::builder()
+        .title(format!("Choose {title} Color"))
+        .with_alpha(true)
+        .build();
+    let button = ColorDialogButton::builder()
+        .dialog(&dialog)
+        .rgba(&initial)
+        .valign(Align::Center)
+        .build();
+    row.append(&button);
+
+    let reset = Button::builder()
+        .icon_name("edit-clear-symbolic")
+        .tooltip_text("Reset to theme")
+        .valign(Align::Center)
+        .build();
+    row.append(&reset);
+
+    let suppress = Rc::new(Cell::new(false));
+
+    let service_c = config_service.clone();
+    let value_c = value_label.clone();
+    let suppress_c = Rc::clone(&suppress);
+    button.connect_rgba_notify(move |btn| {
+        if suppress_c.get() {
+            return;
+        }
+        let hex = rgba_to_hex(&btn.rgba());
+        let mut cfg = service_c.get_config();
+        set_color_value(&mut cfg, is_bubble, is_background, Some(hex.clone()));
+        let _ = service_c.update_config(cfg);
+        value_c.set_label(&hex);
+    });
+
+    let service_c = config_service.clone();
+    let value_c = value_label.clone();
+    let button_c = button.clone();
+    let suppress_c = Rc::clone(&suppress);
+    reset.connect_clicked(move |_| {
+        let mut cfg = service_c.get_config();
+        set_color_value(&mut cfg, is_bubble, is_background, None);
+        let _ = service_c.update_config(cfg);
+        value_c.set_label("Auto");
+        suppress_c.set(true);
+        button_c.set_rgba(&fallback);
+        suppress_c.set(false);
+    });
+
+    row
+}
+
+fn create_color_section(
+    config_service: &ConfigService,
+    is_bubble: bool,
+    window: &ApplicationWindow,
+) -> GtkBox {
+    let config = config_service.get_config();
+    let (background, foreground, opacity) = if is_bubble {
+        (
+            config.bubble.background.clone(),
+            config.bubble.foreground.clone(),
+            config.bubble.opacity,
+        )
+    } else {
+        (
+            config.background.clone(),
+            config.foreground.clone(),
+            config.opacity,
+        )
+    };
+
+    let background_theme = resolve_theme_color(window, "theme_bg_color")
+        .unwrap_or_else(|| gtk4::gdk::RGBA::new(0.13, 0.13, 0.13, 1.0))
+        .with_alpha(opacity as f32);
+    let foreground_theme = resolve_theme_color(window, "card_fg_color")
+        .unwrap_or_else(|| gtk4::gdk::RGBA::new(1.0, 1.0, 1.0, 1.0));
+
+    let section = GtkBox::new(Orientation::Vertical, 12);
+
+    let label = Label::builder()
+        .label("COLORS")
+        .css_classes(vec!["heading", "caption"])
+        .halign(Align::Start)
+        .build();
+    section.append(&label);
+
+    let rows = GtkBox::new(Orientation::Vertical, 8);
+    rows.append(&create_color_row(
+        "Background",
+        background,
+        config_service,
+        is_bubble,
+        true,
+        background_theme,
+    ));
+    rows.append(&create_color_row(
+        "Text",
+        foreground,
+        config_service,
+        is_bubble,
+        false,
+        foreground_theme,
+    ));
+    section.append(&rows);
+
+    section
+}
+
 fn create_keystroke_settings(
     config_service: &ConfigService,
     typography_service: &TypographyService,
@@ -574,6 +752,8 @@ fn create_keystroke_settings(
             }
         },
     ));
+
+    right_col.append(&create_color_section(config_service, false, window));
 
     grid.attach(&right_col, 1, 0, 1, 1);
 
@@ -1069,6 +1249,8 @@ fn create_bubble_settings(
             }
         },
     ));
+
+    right_col.append(&create_color_section(config_service, true, window));
 
     grid.attach(&right_col, 1, 0, 1, 1);
 

@@ -5,10 +5,50 @@ use hibiki::{app, compositor, input, tray};
 use tracing::{info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
+const HELP: &str = "\
+Hibiki - keystroke and bubble visualizer for Wayland
+
+USAGE:
+    hibiki [OPTIONS]
+
+OPTIONS:
+    -n, --no-ui             Skip the launcher and start in the configured mode
+    -k, --keystroke-toggle  Switch to keystroke mode
+    -b, --bubble-toggle     Switch to bubble mode
+        --keystroke         Alias for --keystroke-toggle
+        --bubble            Alias for --bubble-toggle
+    -t, --toggle            Toggle between keystroke and bubble mode
+    -p, --pause-toggle      Pause or resume key capture
+        --settings          Open the settings window
+        --launcher          Show the launcher window
+        --quit              Quit the running instance
+    -h, --help              Print this help and exit
+    -V, --version           Print the version and exit
+
+All control options are forwarded to an already-running instance, so they can
+be bound to compositor shortcuts, e.g. on Hyprland:
+
+    bind = SUPER, K, exec, hibiki --keystroke-toggle
+    bind = SUPER, B, exec, hibiki --bubble-toggle
+    bind = SUPER, P, exec, hibiki --pause-toggle
+";
+
 fn main() -> Result<()> {
     init_logging();
 
-    let no_ui = std::env::args().any(|a| a == "--no-ui" || a == "-n");
+    let args: Vec<String> = std::env::args().collect();
+
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        print!("{HELP}");
+        return Ok(());
+    }
+
+    if args.iter().any(|a| a == "--version" || a == "-V") {
+        println!("hibiki {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
+    let no_ui = args.iter().any(|a| a == "--no-ui" || a == "-n");
 
     info!("Starting Hibiki v{}", env!("CARGO_PKG_VERSION"));
     if no_ui {
@@ -30,6 +70,14 @@ fn main() -> Result<()> {
 
     info!("Configuration loaded: {:?}", config.position);
 
+    let app = app::App::new(config_service, no_ui);
+
+    if app.is_remote() {
+        info!("Another instance is running; forwarding command line");
+        let exit_code = app.run();
+        std::process::exit(exit_code);
+    }
+
     if config.auto_detect_layout {
         let layout_manager = input::LayoutManager::new();
         if let Err(e) = layout_manager.init() {
@@ -42,13 +90,11 @@ fn main() -> Result<()> {
     match tray::start_tray() {
         Ok((tray_rx, tray_handle)) => {
             info!("System tray started successfully");
-            let app = app::App::new(config_service, no_ui);
             let exit_code = app.run_with_tray(tray_rx, tray_handle);
             std::process::exit(exit_code);
         }
         Err(e) => {
             warn!("Failed to start system tray: {}, running without tray", e);
-            let app = app::App::new(config_service, no_ui);
             let exit_code = app.run();
             std::process::exit(exit_code);
         }

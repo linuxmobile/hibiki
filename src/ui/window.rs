@@ -12,9 +12,102 @@ fn escape_css_string(s: &str) -> String {
         .replace('\r', "")
 }
 
+/// Validate and normalize a user-supplied CSS color.
+///
+/// Only a conservative, injection-safe subset is accepted: hex colors
+/// (`#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`) and `rgb()`/`rgba()` functional
+/// notation with numeric components. Anything else is rejected so it can never
+/// break out of the declaration and inject arbitrary CSS.
+fn sanitize_color(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+
+    if let Some(hex) = value.strip_prefix('#') {
+        let valid_len = matches!(hex.len(), 3 | 4 | 6 | 8);
+        if valid_len && hex.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Some(format!("#{}", hex.to_ascii_lowercase()));
+        }
+        return None;
+    }
+
+    let lower = value.to_ascii_lowercase();
+    if let Some(body) = lower
+        .strip_prefix("rgba(")
+        .and_then(|s| s.strip_suffix(')'))
+    {
+        return sanitize_rgb_body(body, 4).map(|_| lower);
+    }
+    if let Some(body) = lower.strip_prefix("rgb(").and_then(|s| s.strip_suffix(')')) {
+        return sanitize_rgb_body(body, 3).map(|_| lower);
+    }
+
+    None
+}
+
+/// Check that `rgb()`/`rgba()` arguments are made up of numeric components.
+fn sanitize_rgb_body(body: &str, expected: usize) -> Option<()> {
+    let parts: Vec<&str> = body.split(',').map(str::trim).collect();
+    if parts.len() != expected {
+        return None;
+    }
+    for part in parts {
+        let numeric = part.strip_suffix('%').unwrap_or(part);
+        if numeric.is_empty() {
+            return None;
+        }
+        let mut seen_dot = false;
+        for c in numeric.chars() {
+            match c {
+                '0'..='9' => {}
+                '.' if !seen_dot => seen_dot = true,
+                _ => return None,
+            }
+        }
+    }
+    Some(())
+}
+
 fn generate_overlay_css(config: &Config) -> String {
     let safe_ks_family = escape_css_string(&config.font_family);
     let safe_bubble_family = escape_css_string(&config.bubble.font_family);
+
+    let keystroke_background = config
+        .background
+        .as_deref()
+        .and_then(sanitize_color)
+        .unwrap_or_else(|| format!("alpha(@theme_bg_color, {})", config.opacity));
+    let keystroke_foreground = config
+        .foreground
+        .as_deref()
+        .and_then(sanitize_color)
+        .unwrap_or_else(|| "@card_fg_color".to_string());
+
+    let bubble_background = config
+        .bubble
+        .background
+        .as_deref()
+        .and_then(sanitize_color)
+        .unwrap_or_else(|| format!("alpha(@theme_bg_color, {})", config.bubble.opacity));
+    let bubble_foreground = config
+        .bubble
+        .foreground
+        .as_deref()
+        .and_then(sanitize_color)
+        .unwrap_or_else(|| "@card_fg_color".to_string());
+
+    let keystroke_modifier_background = if config.background.is_some() {
+        keystroke_background.clone()
+    } else {
+        format!("alpha(@accent_bg_color, {})", config.opacity)
+    };
+    let keystroke_modifier_foreground =
+        if config.background.is_some() || config.foreground.is_some() {
+            keystroke_foreground.clone()
+        } else {
+            "@accent_fg_color".to_string()
+        };
 
     let ks_radius_px = config.corner_radius * 30.0;
     let ks_radius_str = format!("{:.1}px", ks_radius_px);
@@ -44,11 +137,15 @@ fn generate_overlay_css(config: &Config) -> String {
         include_str!("../../style/overlay.css"),
         keystroke_font_family = safe_ks_family,
         keystroke_font_size = config.font_size,
-        keystroke_opacity = config.opacity,
+        keystroke_background = keystroke_background,
+        keystroke_foreground = keystroke_foreground,
+        keystroke_modifier_background = keystroke_modifier_background,
+        keystroke_modifier_foreground = keystroke_modifier_foreground,
         keystroke_border_radius = ks_radius_str,
         bubble_font_family = safe_bubble_family,
         bubble_font_size = config.bubble.font_size,
-        bubble_opacity = config.bubble.opacity,
+        bubble_background = bubble_background,
+        bubble_foreground = bubble_foreground,
         bubble_border_radius = b_radius_str
     );
     format!(
@@ -174,5 +271,73 @@ mod tests {
             escape_css_string("Injection\"; color: red;"),
             "Injection\\\"; color: red;"
         );
+    }
+
+    #[test]
+    fn test_sanitize_color_accepts_valid_values() {
+        assert_eq!(sanitize_color("#1e1e2e").as_deref(), Some("#1e1e2e"));
+        assert_eq!(sanitize_color("#ABC").as_deref(), Some("#abc"));
+        assert_eq!(sanitize_color("#CDd6F4").as_deref(), Some("#cdd6f4"));
+        assert_eq!(
+            sanitize_color("  #ff00ff80  ").as_deref(),
+            Some("#ff00ff80")
+        );
+        assert_eq!(
+            sanitize_color("rgb(30, 30, 46)").as_deref(),
+            Some("rgb(30, 30, 46)")
+        );
+        assert_eq!(
+            sanitize_color("rgba(30, 30, 46, 0.5)").as_deref(),
+            Some("rgba(30, 30, 46, 0.5)")
+        );
+    }
+
+    #[test]
+    fn test_sanitize_color_rejects_injection() {
+        assert!(sanitize_color("").is_none());
+        assert!(sanitize_color("red").is_none());
+        assert!(sanitize_color("#12345").is_none());
+        assert!(sanitize_color("#zzzzzz").is_none());
+        assert!(sanitize_color("#fff; } body { background: red").is_none());
+        assert!(sanitize_color("url(evil)").is_none());
+        assert!(sanitize_color("rgb(1, 2)").is_none());
+        assert!(sanitize_color("rgb(1, 2, 3, 4)").is_none());
+        assert!(sanitize_color("rgb(a, b, c)").is_none());
+    }
+
+    #[test]
+    fn test_generate_overlay_css_uses_custom_colors() {
+        let config = Config {
+            background: Some("#1e1e2e".to_string()),
+            foreground: Some("#cdd6f4".to_string()),
+            bubble: crate::domain::config::BubbleConfig {
+                background: Some("rgba(10, 10, 10, 0.8)".to_string()),
+                foreground: Some("#ffffff".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let css = generate_overlay_css(&config);
+
+        assert!(css.contains("background-color: #1e1e2e;"));
+        assert!(css.contains("color: #cdd6f4;"));
+        assert!(css.contains("background-color: rgba(10, 10, 10, 0.8);"));
+        assert!(css.contains("color: #ffffff;"));
+    }
+
+    #[test]
+    fn test_generate_overlay_css_falls_back_on_invalid_colors() {
+        let config = Config {
+            background: Some("red; } body { }".to_string()),
+            foreground: Some("not-a-color".to_string()),
+            ..Default::default()
+        };
+
+        let css = generate_overlay_css(&config);
+
+        assert!(!css.contains("red; } body"));
+        assert!(css.contains("alpha(@theme_bg_color"));
+        assert!(css.contains("color: @card_fg_color;"));
     }
 }
