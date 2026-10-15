@@ -1,3 +1,4 @@
+use crate::domain::config::{KeystrokeConfig, SuperKeyIconConfig, SuperKeyIconMode};
 use crate::input::{is_layout_key, is_modifier, is_super_key, KeyDisplay, XkbState};
 use evdev::Key;
 use gtk4::gdk::Texture;
@@ -6,6 +7,7 @@ use gtk4::prelude::*;
 use gtk4::{Box as GtkBox, Image, Label, Orientation, Widget};
 use std::collections::{HashSet, VecDeque};
 use std::time::{Duration, Instant};
+use tracing::warn;
 
 const LOGO_SVG: &[u8] = include_bytes!("../assets/logo-symbolic.svg");
 
@@ -68,6 +70,91 @@ fn is_word_break_key(key: Key) -> bool {
     )
 }
 
+/// Render Hibiki's built-in logo into a texture at `size` logical pixels,
+/// tinted with the active theme's accent colors. Returns `None` if the SVG
+/// cannot be rasterized.
+pub fn hibiki_logo_texture(size: i32) -> Option<Texture> {
+    let (bg_color, fg_color) = {
+        let dummy = gtk4::Label::new(None);
+        #[allow(deprecated)]
+        let style_context = dummy.style_context();
+
+        let to_hex = |rgba: gtk4::gdk::RGBA| {
+            format!(
+                "#{:02x}{:02x}{:02x}",
+                (rgba.red() * 255.0) as u8,
+                (rgba.green() * 255.0) as u8,
+                (rgba.blue() * 255.0) as u8
+            )
+        };
+
+        #[allow(deprecated)]
+        let fg = style_context
+            .lookup_color("accent_fg_color")
+            .unwrap_or(gtk4::gdk::RGBA::WHITE);
+
+        #[allow(deprecated)]
+        let bg = style_context
+            .lookup_color("accent_bg_color")
+            .or_else(|| style_context.lookup_color("theme_selected_bg_color"))
+            .unwrap_or(gtk4::gdk::RGBA::new(0.18, 0.76, 0.49, 1.0));
+
+        (to_hex(bg), to_hex(fg))
+    };
+
+    let svg_str = String::from_utf8_lossy(LOGO_SVG);
+    let svg_with_color = svg_str
+        .replace("currentColor", &fg_color)
+        .replace("currentBackgroundColor", &bg_color);
+
+    let stream = gtk4::gio::MemoryInputStream::from_bytes(&gtk4::glib::Bytes::from(
+        svg_with_color.as_bytes(),
+    ));
+
+    Pixbuf::from_stream_at_scale(&stream, size, size, false, gtk4::gio::Cancellable::NONE)
+        .ok()
+        .map(|pixbuf| Texture::for_pixbuf(&pixbuf))
+}
+
+/// Load the image selected for [`SuperKeyIconMode::Image`].
+///
+/// Only PNG/WebP files with an alpha channel are accepted so the keystroke
+/// bubble stays visible behind the icon; anything else is rejected with a
+/// warning and the built-in logo is used as a fallback.
+fn load_super_key_image(config: &SuperKeyIconConfig) -> Option<Texture> {
+    if config.mode != SuperKeyIconMode::Image {
+        return None;
+    }
+
+    let path = config.image_path.as_deref()?;
+
+    if !matches!(
+        std::path::Path::new(path)
+            .extension()
+            .and_then(std::ffi::OsStr::to_str)
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("png" | "webp")
+    ) {
+        warn!("Super key image {:?} is not a PNG or WebP file", path);
+        return None;
+    }
+
+    match Pixbuf::from_file(path) {
+        Ok(pixbuf) => {
+            if !pixbuf.has_alpha() {
+                warn!("Super key image {:?} has no transparency; ignoring", path);
+                return None;
+            }
+            Some(Texture::for_pixbuf(&pixbuf))
+        }
+        Err(e) => {
+            warn!("Failed to load super key image {:?}: {}", path, e);
+            None
+        }
+    }
+}
+
 #[derive(Debug)]
 struct DisplayedKey {
     keys: Vec<Key>,
@@ -91,6 +178,17 @@ struct DisplayedKey {
     extendable: bool,
 
     widget: Widget,
+}
+
+/// State of a displayed bubble captured while its widget is rebuilt (for
+/// example after the Super key icon changes).
+struct DisplayedKeyState {
+    keys: Vec<Key>,
+    text: Option<String>,
+    count: usize,
+    last_active: Instant,
+    is_held: bool,
+    extendable: bool,
 }
 
 /// Decision for how a new keypress relates to the trailing bubble.
@@ -160,20 +258,21 @@ pub struct KeyDisplayWidget {
 
     unify_words: bool,
 
+    /// How the Super/Meta key is drawn (built-in logo, theme icon or image).
+    super_key_icon: SuperKeyIconConfig,
+
+    /// Cached built-in logo, tinted with the active theme colors.
     logo_texture: Option<Texture>,
+
+    /// Cached user image for [`SuperKeyIconMode::Image`], if it loaded with an
+    /// alpha channel.
+    super_key_image: Option<Texture>,
 
     xkb_state: XkbState,
 }
 
 impl KeyDisplayWidget {
-    pub fn new(
-        max_keys: usize,
-        display_timeout_ms: u64,
-        separate_duplicate_keys: bool,
-        combine_modifier_keys: bool,
-        max_combo_keys: usize,
-        unify_words: bool,
-    ) -> Self {
+    pub fn new(config: &KeystrokeConfig) -> Self {
         let container = GtkBox::builder()
             .orientation(Orientation::Horizontal)
             .spacing(8)
@@ -183,68 +282,24 @@ impl KeyDisplayWidget {
 
         container.add_css_class("keystroke-container");
 
-        let logo_texture = Self::load_logo_texture();
+        let logo_texture = hibiki_logo_texture(18);
+        let super_key_image = load_super_key_image(&config.super_key_icon);
 
         Self {
             container,
             displayed_keys: VecDeque::new(),
             held_modifiers: HashSet::new(),
             held_keys: HashSet::new(),
-            max_keys,
-            display_duration: Duration::from_millis(display_timeout_ms),
-            separate_duplicate_keys,
-            combine_modifier_keys,
-            max_combo_keys,
-            unify_words,
+            max_keys: config.max_keys,
+            display_duration: Duration::from_millis(config.display_timeout_ms),
+            separate_duplicate_keys: config.separate_duplicate_keys,
+            combine_modifier_keys: config.combine_modifier_keys,
+            max_combo_keys: config.max_combo_keys,
+            unify_words: config.unify_words,
+            super_key_icon: config.super_key_icon.clone(),
             logo_texture,
+            super_key_image,
             xkb_state: XkbState::default(),
-        }
-    }
-
-    fn load_logo_texture() -> Option<Texture> {
-        let (bg_color, fg_color) = {
-            let dummy = gtk4::Label::new(None);
-            #[allow(deprecated)]
-            let style_context = dummy.style_context();
-
-            let to_hex = |rgba: gtk4::gdk::RGBA| {
-                format!(
-                    "#{:02x}{:02x}{:02x}",
-                    (rgba.red() * 255.0) as u8,
-                    (rgba.green() * 255.0) as u8,
-                    (rgba.blue() * 255.0) as u8
-                )
-            };
-
-            #[allow(deprecated)]
-            let fg = style_context
-                .lookup_color("accent_fg_color")
-                .unwrap_or(gtk4::gdk::RGBA::WHITE);
-
-            #[allow(deprecated)]
-            let bg = style_context
-                .lookup_color("accent_bg_color")
-                .or_else(|| style_context.lookup_color("theme_selected_bg_color"))
-                .unwrap_or(gtk4::gdk::RGBA::new(0.18, 0.76, 0.49, 1.0));
-
-            (to_hex(bg), to_hex(fg))
-        };
-
-        let svg_str = String::from_utf8_lossy(LOGO_SVG);
-        let svg_with_color = svg_str
-            .replace("currentColor", &fg_color)
-            .replace("currentBackgroundColor", &bg_color);
-
-        let stream = gtk4::gio::MemoryInputStream::from_bytes(&gtk4::glib::Bytes::from(
-            svg_with_color.as_bytes(),
-        ));
-
-        if let Ok(pixbuf) =
-            Pixbuf::from_stream_at_scale(&stream, 18, 18, false, gtk4::gio::Cancellable::NONE)
-        {
-            Some(Texture::for_pixbuf(&pixbuf))
-        } else {
-            None
         }
     }
 
@@ -577,7 +632,7 @@ impl KeyDisplayWidget {
             }
 
             if is_super_key(*key) {
-                let image = self.create_logo_image();
+                let image = self.create_super_key_image();
                 image.set_halign(gtk4::Align::Center);
                 image.set_valign(gtk4::Align::Center);
                 key_box.append(&image);
@@ -606,13 +661,84 @@ impl KeyDisplayWidget {
         key_box.upcast()
     }
 
-    fn create_logo_image(&self) -> Image {
+    /// Build the icon shown for a Super/Meta key, honouring the configured
+    /// [`SuperKeyIconMode`]. Falls back to Hibiki's logo whenever the chosen
+    /// icon or image is unavailable.
+    fn create_super_key_image(&self) -> Image {
+        match self.super_key_icon.mode {
+            SuperKeyIconMode::Hibiki => self.logo_image(),
+            SuperKeyIconMode::Symbolic | SuperKeyIconMode::Icon => self
+                .super_key_icon
+                .icon_name
+                .as_deref()
+                .filter(|name| !name.is_empty())
+                .map_or_else(
+                    || self.logo_image(),
+                    |name| {
+                        let image = Image::from_icon_name(name);
+                        image.set_pixel_size(18);
+                        image
+                    },
+                ),
+            SuperKeyIconMode::Image => self.super_key_image.as_ref().map_or_else(
+                || self.logo_image(),
+                |texture| {
+                    let image = Image::from_paintable(Some(texture));
+                    image.set_pixel_size(18);
+                    image
+                },
+            ),
+        }
+    }
+
+    fn logo_image(&self) -> Image {
         if let Some(texture) = &self.logo_texture {
             let image = Image::from_paintable(Some(texture));
             image.set_pixel_size(18);
             image
         } else {
             Image::new()
+        }
+    }
+
+    /// Rebuild the widgets of currently displayed bubbles so a changed Super
+    /// key icon becomes visible immediately, preserving their timing and held
+    /// state.
+    fn refresh_widgets(&mut self) {
+        let entries: Vec<DisplayedKeyState> = self
+            .displayed_keys
+            .iter()
+            .map(|d| DisplayedKeyState {
+                keys: d.keys.clone(),
+                text: d.text.clone(),
+                count: d.count,
+                last_active: d.last_active,
+                is_held: d.is_held,
+                extendable: d.extendable,
+            })
+            .collect();
+
+        while let Some(child) = self.container.first_child() {
+            self.container.remove(&child);
+        }
+        self.displayed_keys.clear();
+
+        for state in entries {
+            let widget = match &state.text {
+                Some(text) => self.create_word_widget(text),
+                None => self.create_combo_widget(&state.keys, state.count),
+            };
+            self.container.append(&widget);
+
+            self.displayed_keys.push_back(DisplayedKey {
+                keys: state.keys,
+                text: state.text,
+                count: state.count,
+                last_active: state.last_active,
+                is_held: state.is_held,
+                extendable: state.extendable,
+                widget,
+            });
         }
     }
 
@@ -725,6 +851,17 @@ impl KeyDisplayWidget {
     #[allow(dead_code)]
     pub fn set_unify_words(&mut self, unify: bool) {
         self.unify_words = unify;
+    }
+
+    /// Swap the Super/Meta key icon at runtime and redraw visible bubbles.
+    pub fn set_super_key_icon(&mut self, config: &SuperKeyIconConfig) {
+        if self.super_key_icon == *config {
+            return;
+        }
+
+        self.super_key_icon = config.clone();
+        self.super_key_image = load_super_key_image(config);
+        self.refresh_widgets();
     }
 
     #[allow(dead_code)]

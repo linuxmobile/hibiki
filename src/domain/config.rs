@@ -96,6 +96,44 @@ impl Position {
     }
 }
 
+/// How the Super/Meta key is drawn inside a keystroke bubble.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SuperKeyIconMode {
+    /// Hibiki's built-in logo (the default).
+    #[default]
+    Hibiki,
+    /// A monochrome icon from the current icon theme, tinted like the key text.
+    Symbolic,
+    /// A full-color icon from the current icon theme.
+    Icon,
+    /// A user-supplied PNG/WebP image. It must carry an alpha channel so the
+    /// key background shows through.
+    Image,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct SuperKeyIconConfig {
+    pub mode: SuperKeyIconMode,
+    /// Icon name used by the [`SuperKeyIconMode::Symbolic`] and
+    /// [`SuperKeyIconMode::Icon`] modes (e.g. `start-here-symbolic`).
+    pub icon_name: Option<String>,
+    /// Path to the image used by [`SuperKeyIconMode::Image`].
+    pub image_path: Option<String>,
+}
+
+impl Validate for SuperKeyIconConfig {
+    fn validate(&mut self) {
+        if self.icon_name.as_deref().is_some_and(str::is_empty) {
+            self.icon_name = None;
+        }
+        if self.image_path.as_deref().is_some_and(str::is_empty) {
+            self.image_path = None;
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct AudioConfig {
@@ -241,6 +279,9 @@ pub struct KeystrokeConfig {
 
     pub keyboard_layout: Option<String>,
 
+    /// How the Super/Meta key is rendered in keystroke bubbles.
+    pub super_key_icon: SuperKeyIconConfig,
+
     pub bubble: BubbleConfig,
 
     pub audio: AudioConfig,
@@ -268,6 +309,7 @@ impl Validate for KeystrokeConfig {
 
         self.bubble.validate();
         self.audio.validate();
+        self.super_key_icon.validate();
     }
 }
 
@@ -298,6 +340,7 @@ impl Default for KeystrokeConfig {
             toggle_focus_hotkey: "<Control>b".to_string(),
             auto_detect_layout: true,
             keyboard_layout: None,
+            super_key_icon: SuperKeyIconConfig::default(),
             bubble: BubbleConfig::default(),
             audio: AudioConfig::default(),
             corner_radius: 1.0,
@@ -379,6 +422,47 @@ mod tests {
         assert_eq!(parsed.foreground.as_deref(), Some("#cdd6f4"));
         assert_eq!(parsed.bubble.background.as_deref(), Some("#181825"));
         assert_eq!(parsed.bubble.foreground.as_deref(), Some("#cdd6f4"));
+    }
+
+    #[test]
+    fn test_super_key_icon_defaults_to_hibiki_logo() {
+        let config = KeystrokeConfig::default();
+        assert_eq!(config.super_key_icon.mode, SuperKeyIconMode::Hibiki);
+        assert!(config.super_key_icon.icon_name.is_none());
+        assert!(config.super_key_icon.image_path.is_none());
+    }
+
+    #[test]
+    fn test_super_key_icon_toml_roundtrip() {
+        let config = KeystrokeConfig {
+            super_key_icon: SuperKeyIconConfig {
+                mode: SuperKeyIconMode::Symbolic,
+                icon_name: Some("start-here-symbolic".to_string()),
+                image_path: None,
+            },
+            ..Default::default()
+        };
+
+        let toml = toml::to_string_pretty(&config).unwrap();
+        let parsed: KeystrokeConfig = toml::from_str(&toml).unwrap();
+
+        assert_eq!(parsed.super_key_icon.mode, SuperKeyIconMode::Symbolic);
+        assert_eq!(
+            parsed.super_key_icon.icon_name.as_deref(),
+            Some("start-here-symbolic")
+        );
+    }
+
+    #[test]
+    fn test_super_key_icon_validation_clears_blank_strings() {
+        let mut config = SuperKeyIconConfig {
+            mode: SuperKeyIconMode::Image,
+            icon_name: Some(String::new()),
+            image_path: Some(String::new()),
+        };
+        config.validate();
+        assert!(config.icon_name.is_none());
+        assert!(config.image_path.is_none());
     }
 
     #[test]

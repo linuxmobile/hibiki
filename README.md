@@ -97,6 +97,28 @@ Colors accept hex (`#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`) or
 active GTK theme is used, so light/dark switching keeps working. The same
 options are available in the **Settings → Colors** section of the UI.
 
+### Super key icon
+
+The Super/Meta key can show Hibiki's built-in logo (default), an icon from your
+current icon theme, or a custom image:
+
+```toml
+[super_key_icon]
+# "hibiki" (default) | "symbolic" | "icon" | "image"
+mode = "symbolic"
+# Icon theme name for the "symbolic" and "icon" modes.
+icon_name = "start-here-symbolic"
+# Path to a PNG or WebP file for the "image" mode.
+# image_path = "/home/you/.config/hibiki/logo.png"
+```
+
+`symbolic` uses a monochrome icon tinted like the key text, while `icon` uses
+the theme's full-color artwork. `image` loads a PNG or WebP that **must have a
+transparent background** (an alpha channel); files without transparency are
+ignored and the built-in logo is used instead. Everything is configurable from
+**Settings → Keystrokes → Super Key Icon**, which offers a searchable icon
+picker with a live preview.
+
 ## Control from the compositor (CLI)
 
 Hibiki ships a small CLI that talks to the running instance, so modes can be

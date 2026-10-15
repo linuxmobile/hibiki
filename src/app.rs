@@ -767,14 +767,7 @@ fn start_keystroke_mode(
         state.borrow_mut().drag_controllers = controllers;
     }
 
-    let display = Rc::new(RefCell::new(KeyDisplayWidget::new(
-        config.max_keys,
-        config.display_timeout_ms,
-        config.separate_duplicate_keys,
-        config.combine_modifier_keys,
-        config.max_combo_keys,
-        config.unify_words,
-    )));
+    let display = Rc::new(RefCell::new(KeyDisplayWidget::new(&config)));
 
     let mode_active = Arc::new(AtomicBool::new(true));
 
@@ -910,6 +903,7 @@ fn start_keystroke_mode(
                 disp.set_combine_modifier_keys(cfg.combine_modifier_keys);
                 disp.set_max_combo_keys(cfg.max_combo_keys);
                 disp.set_unify_words(cfg.unify_words);
+                disp.set_super_key_icon(&cfg.super_key_icon);
             }
 
             if let Some(provider) = &state_c.borrow().css_provider {

@@ -1,14 +1,14 @@
 use crate::application::config_service::ConfigService;
 use crate::application::typography_service::TypographyService;
-use crate::domain::config::{AudioConfig, KeystrokeConfig, Position};
+use crate::domain::config::{AudioConfig, KeystrokeConfig, Position, SuperKeyIconMode};
 use crate::infrastructure::audio::SoundPackLoader;
 use gtk4::prelude::*;
 use gtk4::{
     glib, Adjustment, Align, Application, ApplicationWindow, Box as GtkBox, Button, ColorDialog,
-    ColorDialogButton, CustomFilter, EventControllerKey, FilterListModel, Grid, Label,
-    ListItemFactory, ListScrollFlags, ListView, Orientation, Overflow, Scale, ScrolledWindow,
-    SearchEntry, SelectionModel, SignalListItemFactory, SingleSelection, Stack, StringList, Switch,
-    ToggleButton,
+    ColorDialogButton, CustomFilter, DropDown, EventControllerKey, FileDialog, FileFilter,
+    FilterListModel, Grid, GridView, Image, Label, ListItemFactory, ListScrollFlags, ListView,
+    Orientation, Overflow, Scale, ScrolledWindow, SearchEntry, SelectionModel,
+    SignalListItemFactory, SingleSelection, Stack, StringList, Switch, ToggleButton,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -636,6 +636,333 @@ fn create_color_section(
     section
 }
 
+fn mode_index(mode: SuperKeyIconMode) -> u32 {
+    match mode {
+        SuperKeyIconMode::Hibiki => 0,
+        SuperKeyIconMode::Symbolic => 1,
+        SuperKeyIconMode::Icon => 2,
+        SuperKeyIconMode::Image => 3,
+    }
+}
+
+fn mode_from_index(index: u32) -> SuperKeyIconMode {
+    match index {
+        1 => SuperKeyIconMode::Symbolic,
+        2 => SuperKeyIconMode::Icon,
+        3 => SuperKeyIconMode::Image,
+        _ => SuperKeyIconMode::Hibiki,
+    }
+}
+
+/// Icons offered by the picker for a given mode. Symbolic mode is restricted to
+/// `*-symbolic` names; Icon mode offers the full theme.
+fn icons_for_mode<'a>(
+    mode: SuperKeyIconMode,
+    all: &'a [String],
+    symbolic: &'a [String],
+) -> &'a [String] {
+    match mode {
+        SuperKeyIconMode::Symbolic => symbolic,
+        SuperKeyIconMode::Icon => all,
+        SuperKeyIconMode::Hibiki | SuperKeyIconMode::Image => &[],
+    }
+}
+
+/// Load a PNG/WebP image for the settings preview, rejecting files without an
+/// alpha channel.
+fn load_preview_texture(path: &str) -> Option<gtk4::gdk::Texture> {
+    let pixbuf = gtk4::gdk_pixbuf::Pixbuf::from_file(path).ok()?;
+    if !pixbuf.has_alpha() {
+        return None;
+    }
+    Some(gtk4::gdk::Texture::for_pixbuf(&pixbuf))
+}
+
+fn create_super_key_icon_section(
+    config_service: &ConfigService,
+    window: &ApplicationWindow,
+) -> GtkBox {
+    let config = config_service.get_config();
+    let current = config.super_key_icon.clone();
+
+    let section = GtkBox::new(Orientation::Vertical, 12);
+
+    let header = GtkBox::new(Orientation::Horizontal, 12);
+    let title = Label::builder()
+        .label("SUPER KEY ICON")
+        .css_classes(vec!["heading", "caption"])
+        .halign(Align::Start)
+        .hexpand(true)
+        .build();
+    header.append(&title);
+
+    let preview = Image::new();
+    preview.set_pixel_size(24);
+    preview.set_valign(Align::Center);
+    header.append(&preview);
+    section.append(&header);
+
+    let dropdown = DropDown::from_strings(&["Hibiki logo", "Symbolic", "Icons", "Image"]);
+    dropdown.set_halign(Align::Start);
+    dropdown.set_selected(mode_index(current.mode));
+    section.append(&dropdown);
+
+    let hint = Label::builder()
+        .label(
+            "Symbolic and Icons use your current icon theme. Image accepts a transparent \
+             PNG or WebP file.",
+        )
+        .css_classes(vec!["caption", "dim-label"])
+        .halign(Align::Start)
+        .xalign(0.0)
+        .wrap(true)
+        .build();
+    section.append(&hint);
+
+    let picker_box = GtkBox::new(Orientation::Vertical, 8);
+
+    let search_entry = SearchEntry::builder()
+        .placeholder_text("Search icons...")
+        .build();
+    picker_box.append(&search_entry);
+
+    let icon_scroll = ScrolledWindow::builder()
+        .min_content_height(160)
+        .hscrollbar_policy(gtk4::PolicyType::Never)
+        .css_classes(vec!["font-list-frame"])
+        .overflow(Overflow::Hidden)
+        .build();
+
+    let string_list = StringList::new(&[]);
+    let filter = CustomFilter::new(move |_item| true);
+    let filter_model = FilterListModel::new(Some(string_list.clone()), Some(filter.clone()));
+    let selection_model = SingleSelection::new(Some(filter_model.clone()));
+
+    let factory = SignalListItemFactory::new();
+    factory.connect_setup(|_, list_item| {
+        let list_item = list_item
+            .downcast_ref::<gtk4::ListItem>()
+            .expect("list_item must be a gtk4::ListItem");
+        let image = Image::new();
+        image.set_pixel_size(24);
+        image.set_halign(Align::Center);
+        image.set_valign(Align::Center);
+        image.set_margin_top(8);
+        image.set_margin_bottom(8);
+        list_item.set_child(Some(&image));
+    });
+
+    factory.connect_bind(|_, list_item| {
+        let list_item = list_item
+            .downcast_ref::<gtk4::ListItem>()
+            .expect("list_item must be a gtk4::ListItem");
+        let string_obj = list_item
+            .item()
+            .and_downcast::<gtk4::StringObject>()
+            .expect("item must be a gtk4::StringObject");
+        let name = string_obj.string();
+
+        let image = list_item
+            .child()
+            .and_downcast::<Image>()
+            .expect("child must be a gtk4::Image");
+        image.set_icon_name(Some(&name));
+        image.set_tooltip_text(Some(&name));
+    });
+
+    let grid_view = GridView::new(Some(selection_model.clone()), Some(factory));
+    grid_view.set_min_columns(6);
+    grid_view.set_max_columns(10);
+    grid_view.add_css_class("navigation-sidebar");
+    icon_scroll.set_child(Some(&grid_view));
+    picker_box.append(&icon_scroll);
+    section.append(&picker_box);
+
+    let image_box = GtkBox::new(Orientation::Horizontal, 8);
+    let path_label = Label::builder()
+        .label(
+            current
+                .image_path
+                .clone()
+                .unwrap_or_else(|| "No image selected".to_string()),
+        )
+        .css_classes(vec!["caption", "dim-label"])
+        .ellipsize(gtk4::pango::EllipsizeMode::Middle)
+        .hexpand(true)
+        .xalign(0.0)
+        .build();
+    let choose_btn = Button::builder().label("Choose image...").build();
+    image_box.append(&path_label);
+    image_box.append(&choose_btn);
+    section.append(&image_box);
+
+    let display = gtk4::prelude::WidgetExt::display(window);
+    let theme = gtk4::IconTheme::for_display(&display);
+    let mut names: Vec<String> = theme
+        .icon_names()
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    let all_icons: Rc<Vec<String>> = Rc::new(names);
+    let symbolic_icons: Rc<Vec<String>> = Rc::new(
+        all_icons
+            .iter()
+            .filter(|n| n.ends_with("-symbolic"))
+            .cloned()
+            .collect(),
+    );
+
+    let hibiki_preview = crate::ui::hibiki_logo_texture(24);
+
+    let apply_mode = {
+        let string_list = string_list.clone();
+        let selection_model = selection_model.clone();
+        let picker_box_c = picker_box.clone();
+        let image_box_c = image_box.clone();
+        let preview_c = preview.clone();
+        let all = Rc::clone(&all_icons);
+        let symbolic = Rc::clone(&symbolic_icons);
+        let service_c = config_service.clone();
+
+        move |mode: SuperKeyIconMode| {
+            let is_picker = matches!(mode, SuperKeyIconMode::Symbolic | SuperKeyIconMode::Icon);
+            picker_box_c.set_visible(is_picker);
+            image_box_c.set_visible(mode == SuperKeyIconMode::Image);
+
+            let list = icons_for_mode(mode, &all, &symbolic);
+            let refs: Vec<&str> = list.iter().map(String::as_str).collect();
+            string_list.splice(0, string_list.n_items(), &refs);
+
+            let cfg = service_c.get_config();
+            let icon_name = cfg.super_key_icon.icon_name.as_deref();
+            let selected = icon_name
+                .and_then(|name| list.iter().position(|n| n == name))
+                .map_or(gtk4::INVALID_LIST_POSITION, |idx| idx as u32);
+            selection_model.set_selected(selected);
+
+            match mode {
+                SuperKeyIconMode::Hibiki => {
+                    if let Some(texture) = &hibiki_preview {
+                        preview_c.set_paintable(Some(texture));
+                    } else {
+                        preview_c.clear();
+                    }
+                }
+                SuperKeyIconMode::Symbolic | SuperKeyIconMode::Icon => {
+                    match cfg.super_key_icon.icon_name.as_deref() {
+                        Some(name) if !name.is_empty() => preview_c.set_icon_name(Some(name)),
+                        _ => preview_c.clear(),
+                    }
+                }
+                SuperKeyIconMode::Image => {
+                    match cfg
+                        .super_key_icon
+                        .image_path
+                        .as_deref()
+                        .and_then(load_preview_texture)
+                    {
+                        Some(texture) => preview_c.set_paintable(Some(&texture)),
+                        None => preview_c.clear(),
+                    }
+                }
+            }
+        }
+    };
+
+    apply_mode(current.mode);
+
+    let filter_c = filter.clone();
+    search_entry.connect_search_changed(move |entry| {
+        let text = entry.text().to_lowercase();
+        filter_c.set_filter_func(move |item| {
+            item.downcast_ref::<gtk4::StringObject>()
+                .is_some_and(|s| s.string().to_lowercase().contains(&text))
+        });
+    });
+
+    let service_c = config_service.clone();
+    let preview_c = preview.clone();
+    selection_model.connect_selected_item_notify(move |model| {
+        let Some(item) = model.selected_item() else {
+            return;
+        };
+        let Ok(string_obj) = item.downcast::<gtk4::StringObject>() else {
+            return;
+        };
+        let name = string_obj.string().to_string();
+
+        let mut cfg = service_c.get_config();
+        if !matches!(
+            cfg.super_key_icon.mode,
+            SuperKeyIconMode::Symbolic | SuperKeyIconMode::Icon
+        ) || cfg.super_key_icon.icon_name.as_deref() == Some(name.as_str())
+        {
+            return;
+        }
+
+        cfg.super_key_icon.icon_name = Some(name.clone());
+        let _ = service_c.update_config(cfg);
+        preview_c.set_icon_name(Some(&name));
+    });
+
+    let service_c = config_service.clone();
+    let apply_mode_c = apply_mode.clone();
+    dropdown.connect_selected_notify(move |dd| {
+        let mode = mode_from_index(dd.selected());
+        let mut cfg = service_c.get_config();
+        if cfg.super_key_icon.mode != mode {
+            cfg.super_key_icon.mode = mode;
+            let _ = service_c.update_config(cfg);
+        }
+        apply_mode_c(mode);
+    });
+
+    let service_c = config_service.clone();
+    let path_label_c = path_label.clone();
+    let preview_c = preview.clone();
+    let window_c = window.clone();
+    choose_btn.connect_clicked(move |_| {
+        let filter = FileFilter::new();
+        filter.set_name(Some("Images (PNG, WebP)"));
+        filter.add_mime_type("image/png");
+        filter.add_mime_type("image/webp");
+
+        let dialog = FileDialog::builder()
+            .title("Choose Super Key Image")
+            .modal(true)
+            .default_filter(&filter)
+            .build();
+
+        let service_c = service_c.clone();
+        let path_label_c = path_label_c.clone();
+        let preview_c = preview_c.clone();
+        let window_c = window_c.clone();
+        glib::MainContext::default().spawn_local(async move {
+            if let Ok(file) = dialog.open_future(Some(&window_c)).await {
+                let Some(path) = file.path() else {
+                    return;
+                };
+                let path_str = path.to_string_lossy().to_string();
+
+                let mut cfg = service_c.get_config();
+                cfg.super_key_icon.mode = SuperKeyIconMode::Image;
+                cfg.super_key_icon.image_path = Some(path_str.clone());
+                let _ = service_c.update_config(cfg);
+
+                path_label_c.set_label(&path_str);
+                match load_preview_texture(&path_str) {
+                    Some(texture) => preview_c.set_paintable(Some(&texture)),
+                    None => preview_c.clear(),
+                }
+            }
+        });
+    });
+
+    section
+}
+
 fn create_keystroke_settings(
     config_service: &ConfigService,
     typography_service: &TypographyService,
@@ -756,6 +1083,20 @@ fn create_keystroke_settings(
     right_col.append(&create_color_section(config_service, false, window));
 
     grid.attach(&right_col, 1, 0, 1, 1);
+
+    let super_key_label = Label::builder()
+        .label("Super Key Icon")
+        .css_classes(vec!["title-2"])
+        .halign(Align::Start)
+        .margin_bottom(16)
+        .build();
+    content_box.append(&super_key_label);
+
+    let super_key_card = GtkBox::new(Orientation::Vertical, 0);
+    super_key_card.add_css_class("settings-card");
+    super_key_card.set_margin_bottom(24);
+    super_key_card.append(&create_super_key_icon_section(config_service, window));
+    content_box.append(&super_key_card);
 
     let behavior_label = Label::builder()
         .label("Behavior")
