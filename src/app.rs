@@ -237,8 +237,6 @@ fn setup_launcher_and_modes(
     state.borrow_mut().launcher_window = Some(launcher.clone());
 
     if no_ui {
-        // Skip the Dashboard. Use display_mode from config to pick which
-        // visualizer to start, defaulting to Keystroke if unset.
         let mode = config_service.get_config().display_mode;
         switch_mode(app, state, &config_service, mode);
     } else {
@@ -306,11 +304,9 @@ fn setup_tray_handling(
 ) {
     let tray_handle = Arc::new(tray_handle);
 
-    // Initial icon update
     let config = config_service.get_config();
     update_tray_icon(&tray_handle, &config);
 
-    // Watch for config changes
     let mut config_rx = config_service.subscribe();
     let tray_handle_c = Arc::clone(&tray_handle);
     glib::MainContext::default().spawn_local(async move {
@@ -320,7 +316,6 @@ fn setup_tray_handling(
         }
     });
 
-    // Watch for system theme changes
     let tray_handle_t = Arc::clone(&tray_handle);
     let config_service_t = config_service.clone();
     if let Some(settings) = gtk4::Settings::default() {
@@ -346,12 +341,9 @@ fn update_tray_icon(
     let is_dark = match config.keystroke_theme.as_str() {
         "dark" => true,
         "light" => false,
-        _ => {
-            // "system" - check GTK settings
-            gtk4::Settings::default()
-                .map(|s| s.is_gtk_application_prefer_dark_theme())
-                .unwrap_or(true)
-        }
+        _ => gtk4::Settings::default()
+            .map(|s| s.is_gtk_application_prefer_dark_theme())
+            .unwrap_or(true),
     };
 
     let theme = if is_dark {
@@ -561,6 +553,9 @@ fn start_keystroke_mode(
     let display = Rc::new(RefCell::new(KeyDisplayWidget::new(
         config.max_keys,
         config.display_timeout_ms,
+        config.separate_duplicate_keys,
+        config.combine_modifier_keys,
+        config.max_combo_keys,
     )));
 
     let mode_active = Arc::new(AtomicBool::new(true));
@@ -693,6 +688,9 @@ fn start_keystroke_mode(
                 let mut disp = display_c.borrow_mut();
                 disp.set_display_timeout(cfg.display_timeout_ms);
                 disp.set_max_keys(cfg.max_keys);
+                disp.set_separate_duplicate_keys(cfg.separate_duplicate_keys);
+                disp.set_combine_modifier_keys(cfg.combine_modifier_keys);
+                disp.set_max_combo_keys(cfg.max_combo_keys);
             }
 
             if let Some(provider) = &state_c.borrow().css_provider {
@@ -940,7 +938,6 @@ fn start_bubble_mode(
                 disp.set_display_duration(cfg.bubble.timeout_ms);
             }
 
-            // Update CSS provider if available
             if let Some(provider) = &state_c.borrow().css_provider {
                 crate::ui::update_css_provider(provider, &cfg);
             }

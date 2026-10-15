@@ -97,7 +97,6 @@ impl NiriClient {
             }
         }
 
-        // Fallback for raw layouts or fragments (used in some tests)
         if let Ok(l) = serde_json::from_str::<NiriKeyboardLayouts>(json) {
             return KeyboardLayouts {
                 names: l.names,

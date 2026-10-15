@@ -393,9 +393,6 @@ impl LayoutManager {
                 }
             };
 
-            // Umbriel always sends a full snapshot (names + current index) rather
-            // than a delta, so refresh the cache and surface the active layout as
-            // a switch for the visualizer.
             if let Some(LayoutEvent::LayoutsChanged {
                 layouts: new_layouts,
             }) = client.parse_event(&line)

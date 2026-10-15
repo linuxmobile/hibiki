@@ -8,9 +8,6 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 fn main() -> Result<()> {
     init_logging();
 
-    // Parse --no-ui / -n before GTK sees the args.
-    // GTK's own arg parser will error on unknown flags, so we strip ours out
-    // by passing an empty arg list to GTK later (run_with_args::<&str>(&[])).
     let no_ui = std::env::args().any(|a| a == "--no-ui" || a == "-n");
 
     info!("Starting Hibiki v{}", env!("CARGO_PKG_VERSION"));

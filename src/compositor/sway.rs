@@ -13,7 +13,7 @@ const IPC_GET_INPUTS: u32 = 100;
 #[allow(dead_code)]
 const IPC_SUBSCRIBE: u32 = 2;
 
-pub const MAX_IPC_PAYLOAD_SIZE: u32 = 10 * 1024 * 1024; // 10 MiB
+pub const MAX_IPC_PAYLOAD_SIZE: u32 = 10 * 1024 * 1024;
 
 #[derive(Debug)]
 pub struct SwayClient {
@@ -306,18 +306,15 @@ mod tests {
 
     #[test]
     fn test_validate_payload_len() {
-        // Valid length
         assert!(SwayClient::validate_payload_len(1024).is_ok());
         assert_eq!(SwayClient::validate_payload_len(1024).unwrap(), 1024);
 
-        // Max length
         assert!(SwayClient::validate_payload_len(MAX_IPC_PAYLOAD_SIZE).is_ok());
         assert_eq!(
             SwayClient::validate_payload_len(MAX_IPC_PAYLOAD_SIZE).unwrap(),
             MAX_IPC_PAYLOAD_SIZE as usize
         );
 
-        // Exceeds max length
         let too_large = MAX_IPC_PAYLOAD_SIZE + 1;
         let result = SwayClient::validate_payload_len(too_large);
         assert!(result.is_err());

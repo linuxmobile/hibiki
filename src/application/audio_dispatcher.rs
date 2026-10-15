@@ -193,13 +193,10 @@ impl AudioDispatcher {
         }
 
         if let Some(pack) = &state.pack {
-            // 1. Try raw keycode first
             let raw_key = keycode.to_string();
 
-            // 2. Try mapped keycode (Mechvibes scancode)
             let mapped_key = map_evdev_to_mechvibes(keycode).map(|k| k.to_string());
 
-            // 3. Fallback to generic key (e.g. "30" for 'A') if neither works
             let fallback_key = "30".to_string();
 
             let target_key = if pack.config.defines.contains_key(&raw_key) {
@@ -210,7 +207,6 @@ impl AudioDispatcher {
             {
                 Some(mapped.clone())
             } else if pack.config.defines.contains_key(&fallback_key) {
-                // If the key is not defined, use the fallback
                 Some(fallback_key)
             } else {
                 None

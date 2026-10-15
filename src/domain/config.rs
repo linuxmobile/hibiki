@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 const DEFAULT_DISPLAY_TIMEOUT_MS: u64 = 2000;
 const DEFAULT_BUBBLE_TIMEOUT_MS: u64 = 10000;
 const DEFAULT_MAX_KEYS: usize = 5;
+const DEFAULT_MAX_COMBO_KEYS: usize = 4;
 const DEFAULT_MARGIN: i32 = 20;
 
 pub trait Validate {
@@ -158,7 +159,7 @@ impl Default for BubbleConfig {
             hotkey: "<Shift><Control>b".to_string(),
             timeout_ms: DEFAULT_BUBBLE_TIMEOUT_MS,
             opacity: 1.0,
-            corner_radius: 0.36, // Approx 18px based on 50px max
+            corner_radius: 0.36,
         }
     }
 }
@@ -178,6 +179,21 @@ pub struct KeystrokeConfig {
     pub margin: i32,
 
     pub show_modifiers: bool,
+
+    /// When enabled, every keypress is rendered as its own bubble, so pressing
+    /// the same key twice (`f`, `f`) shows two bubbles. When disabled,
+    /// consecutive identical keys are collapsed into a single bubble that shows
+    /// how many times they were pressed.
+    pub separate_duplicate_keys: bool,
+
+    /// When enabled, keys pressed while a modifier is held are appended to the
+    /// trailing bubble instead of starting a new one, e.g. `ctrl + a + b + c`
+    /// while `ctrl` stays pressed.
+    pub combine_modifier_keys: bool,
+
+    /// Upper bound on how many keys (modifiers included) a single combined
+    /// bubble may hold before a new one is started.
+    pub max_combo_keys: usize,
 
     pub all_keyboards: bool,
 
@@ -216,6 +232,8 @@ impl Validate for KeystrokeConfig {
 
         self.max_keys = self.max_keys.clamp(1, 50);
 
+        self.max_combo_keys = self.max_combo_keys.clamp(2, 12);
+
         self.font_scale = self.font_scale.clamp(1.0, 10.0);
 
         self.opacity = self.opacity.clamp(0.0, 1.0);
@@ -240,6 +258,9 @@ impl Default for KeystrokeConfig {
             max_keys: DEFAULT_MAX_KEYS,
             margin: DEFAULT_MARGIN,
             show_modifiers: true,
+            separate_duplicate_keys: true,
+            combine_modifier_keys: false,
+            max_combo_keys: DEFAULT_MAX_COMBO_KEYS,
             all_keyboards: true,
             font_scale: 1.0,
             opacity: 1.0,

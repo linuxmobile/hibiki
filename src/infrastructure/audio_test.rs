@@ -77,7 +77,6 @@ mod tests {
     #[test]
     fn test_path_traversal_protection() {
         let dir = tempdir().unwrap();
-        // Malicious path with ..
         let malicious_path = dir.path().join("../malicious");
         let result = SoundPackLoader::load_from_directory(&malicious_path);
         assert!(result.is_err());

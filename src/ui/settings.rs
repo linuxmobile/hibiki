@@ -243,7 +243,6 @@ fn create_font_selector(
     parent.append(&type_section);
 }
 
-// Helper to create slider sections (Opacity, Size, Corner Radius)
 fn create_slider_section(
     label_text: &str,
     initial_value: f64,
@@ -253,7 +252,7 @@ fn create_slider_section(
     format_type: SliderFormat,
     on_change: impl Fn(f64) + 'static,
 ) -> GtkBox {
-    let section = GtkBox::new(Orientation::Vertical, 4); // Reduced spacing
+    let section = GtkBox::new(Orientation::Vertical, 4);
     let header = GtkBox::new(Orientation::Horizontal, 0);
 
     let label = Label::builder()
@@ -266,7 +265,7 @@ fn create_slider_section(
     let val_label_text = match format_type {
         SliderFormat::Percent => format!("{:.0}%", initial_value * 100.0),
         SliderFormat::Multiplier => format!("{:.1}x", initial_value),
-        SliderFormat::Pixels => format!("{:.0}px", initial_value * 50.0), // Approximate for display
+        SliderFormat::Pixels => format!("{:.0}px", initial_value * 50.0),
     };
 
     let val_label = Label::builder()
@@ -278,8 +277,6 @@ fn create_slider_section(
     header.append(&val_label);
     section.append(&header);
 
-    // Normalize value for adjustment if needed, but here we assume caller passes raw value
-    // For sliders like opacity (0-1) mapped to 0-100 scale:
     let (adj_val, adj_min, adj_max, adj_step) = match format_type {
         SliderFormat::Percent => (
             initial_value * 100.0,
@@ -293,7 +290,7 @@ fn create_slider_section(
             min * 100.0,
             max * 100.0,
             step * 100.0,
-        ), // Use 0-100 scale for smoother slider
+        ),
     };
 
     let adjustment = Adjustment::new(adj_val, adj_min, adj_max, adj_step, adj_step * 10.0, 0.0);
@@ -308,7 +305,7 @@ fn create_slider_section(
         let (display_text, actual_val) = match format_type {
             SliderFormat::Percent => (format!("{:.0}%", val), val / 100.0),
             SliderFormat::Multiplier => (format!("{:.1}x", val), val),
-            SliderFormat::Pixels => (format!("{:.0}%", val), val / 100.0), // Display as % for corner radius too
+            SliderFormat::Pixels => (format!("{:.0}%", val), val / 100.0),
         };
 
         val_label_c.set_label(&display_text);
@@ -497,17 +494,15 @@ fn create_keystroke_settings(
     general_card.append(&grid);
     content_box.append(&general_card);
 
-    let left_col = GtkBox::new(Orientation::Vertical, 24); // Reduced spacing between sections
+    let left_col = GtkBox::new(Orientation::Vertical, 24);
     left_col.set_hexpand(false);
     left_col.set_width_request(250);
 
-    // Theme Section
     left_col.append(&create_theme_section(
         config.keystroke_theme.clone(),
         config_service,
     ));
 
-    // Opacity Section
     let service_c = config_service.clone();
     left_col.append(&create_slider_section(
         "OPACITY",
@@ -525,7 +520,6 @@ fn create_keystroke_settings(
         },
     ));
 
-    // Corner Radius Section
     let service_c = config_service.clone();
     left_col.append(&create_slider_section(
         "CORNER RADIUS",
@@ -543,7 +537,6 @@ fn create_keystroke_settings(
         },
     ));
 
-    // Position Section
     left_col.append(&create_position_section(
         config.position,
         config_service,
@@ -565,7 +558,6 @@ fn create_keystroke_settings(
         |cfg, name| cfg.font_family = name,
     );
 
-    // Size Section
     let service_c = config_service.clone();
     right_col.append(&create_slider_section(
         "SIZE",
@@ -584,10 +576,6 @@ fn create_keystroke_settings(
     ));
 
     grid.attach(&right_col, 1, 0, 1, 1);
-
-    // Behavior Section (unchanged logic, just re-using code or keeping as is)
-    // To keep file size manageable and since no changes requested here, keeping existing implementation
-    // But we need to reconstruct it here as we're replacing the whole file content
 
     let behavior_label = Label::builder()
         .label("Behavior")
@@ -699,6 +687,81 @@ fn create_keystroke_settings(
     drag_box.append(&drag_switch);
     b_left.append(&drag_box);
 
+    let separate_box = GtkBox::new(Orientation::Horizontal, 12);
+    let separate_text = GtkBox::new(Orientation::Vertical, 2);
+    separate_text.set_hexpand(true);
+    let separate_lbl = Label::builder()
+        .label("Separate Repeated Keys")
+        .xalign(0.0)
+        .css_classes(vec!["body"])
+        .build();
+    let separate_sub = Label::builder()
+        .label("Show every repeat in its own bubble")
+        .xalign(0.0)
+        .css_classes(vec!["caption", "dim-label"])
+        .build();
+    separate_text.append(&separate_lbl);
+    separate_text.append(&separate_sub);
+    separate_box.append(&separate_text);
+
+    let separate_switch = Switch::builder()
+        .active(config.separate_duplicate_keys)
+        .valign(Align::Center)
+        .build();
+    separate_box.append(&separate_switch);
+    b_left.append(&separate_box);
+
+    let combine_box = GtkBox::new(Orientation::Horizontal, 12);
+    let combine_text = GtkBox::new(Orientation::Vertical, 2);
+    combine_text.set_hexpand(true);
+    let combine_lbl = Label::builder()
+        .label("Combine Held Modifier")
+        .xalign(0.0)
+        .css_classes(vec!["body"])
+        .build();
+    let combine_sub = Label::builder()
+        .label("Keep modifier attached to following keys (ctrl + a + b)")
+        .xalign(0.0)
+        .css_classes(vec!["caption", "dim-label"])
+        .build();
+    combine_text.append(&combine_lbl);
+    combine_text.append(&combine_sub);
+    combine_box.append(&combine_text);
+
+    let combine_switch = Switch::builder()
+        .active(config.combine_modifier_keys)
+        .valign(Align::Center)
+        .build();
+    combine_box.append(&combine_switch);
+    b_left.append(&combine_box);
+
+    let combo_limit_box = GtkBox::new(Orientation::Horizontal, 12);
+    combo_limit_box.set_valign(Align::Center);
+    let combo_limit_label = Label::builder()
+        .label("Max Combined Keys")
+        .css_classes(vec!["body"])
+        .hexpand(true)
+        .xalign(0.0)
+        .build();
+    combo_limit_box.append(&combo_limit_label);
+
+    let combo_stepper = GtkBox::new(Orientation::Horizontal, 0);
+    combo_stepper.add_css_class("linked");
+
+    let combo_minus = Button::builder().label("-").width_request(32).build();
+    let combo_display = Button::builder()
+        .label(config.max_combo_keys.to_string())
+        .width_request(40)
+        .can_focus(false)
+        .build();
+    let combo_plus = Button::builder().label("+").width_request(32).build();
+
+    combo_stepper.append(&combo_minus);
+    combo_stepper.append(&combo_display);
+    combo_stepper.append(&combo_plus);
+    combo_limit_box.append(&combo_stepper);
+    b_left.append(&combo_limit_box);
+
     behavior_grid.attach(&b_left, 0, 0, 1, 1);
 
     let b_right = GtkBox::new(Orientation::Vertical, 0);
@@ -747,7 +810,6 @@ fn create_keystroke_settings(
     b_right.append(&card_content);
     behavior_grid.attach(&b_right, 1, 0, 1, 1);
 
-    // Event handlers for behavior
     let service_c = config_service.clone();
     let dur_val_c = dur_val_label.clone();
     dur_adj.connect_value_changed(move |adj| {
@@ -791,6 +853,48 @@ fn create_keystroke_settings(
             let _ = service_c.update_config(cfg);
         }
         glib::Propagation::Proceed
+    });
+
+    let service_c = config_service.clone();
+    separate_switch.connect_state_set(move |_, state| {
+        let mut cfg = service_c.get_config();
+        if cfg.separate_duplicate_keys != state {
+            cfg.separate_duplicate_keys = state;
+            let _ = service_c.update_config(cfg);
+        }
+        glib::Propagation::Proceed
+    });
+
+    let service_c = config_service.clone();
+    combine_switch.connect_state_set(move |_, state| {
+        let mut cfg = service_c.get_config();
+        if cfg.combine_modifier_keys != state {
+            cfg.combine_modifier_keys = state;
+            let _ = service_c.update_config(cfg);
+        }
+        glib::Propagation::Proceed
+    });
+
+    let service_minus = config_service.clone();
+    let combo_minus_display = combo_display.clone();
+    combo_minus.connect_clicked(move |_| {
+        let mut cfg = service_minus.get_config();
+        if cfg.max_combo_keys > 2 {
+            cfg.max_combo_keys -= 1;
+            combo_minus_display.set_label(&cfg.max_combo_keys.to_string());
+            let _ = service_minus.update_config(cfg);
+        }
+    });
+
+    let service_plus = config_service.clone();
+    let combo_plus_display = combo_display.clone();
+    combo_plus.connect_clicked(move |_| {
+        let mut cfg = service_plus.get_config();
+        if cfg.max_combo_keys < 12 {
+            cfg.max_combo_keys += 1;
+            combo_plus_display.set_label(&cfg.max_combo_keys.to_string());
+            let _ = service_plus.update_config(cfg);
+        }
     });
 
     setup_hotkey_capture(
@@ -848,17 +952,15 @@ fn create_bubble_settings(
     general_card.append(&grid);
     content_box.append(&general_card);
 
-    let left_col = GtkBox::new(Orientation::Vertical, 24); // Reduced spacing
+    let left_col = GtkBox::new(Orientation::Vertical, 24);
     left_col.set_hexpand(false);
     left_col.set_width_request(250);
 
-    // Theme Mode (Added for consistency, mapped to main config theme as per plan)
     left_col.append(&create_theme_section(
         config.keystroke_theme.clone(),
         config_service,
     ));
 
-    // Opacity Section (Moved up)
     let service_c = config_service.clone();
     left_col.append(&create_slider_section(
         "OPACITY",
@@ -876,7 +978,6 @@ fn create_bubble_settings(
         },
     ));
 
-    // Corner Radius Section
     let service_c = config_service.clone();
     left_col.append(&create_slider_section(
         "CORNER RADIUS",
@@ -894,7 +995,6 @@ fn create_bubble_settings(
         },
     ));
 
-    // Position Section (Moved down)
     left_col.append(&create_position_section(
         config.bubble.position,
         config_service,
@@ -916,7 +1016,6 @@ fn create_bubble_settings(
         |cfg, name| cfg.bubble.font_family = name,
     );
 
-    // Size Section
     let service_c = config_service.clone();
     right_col.append(&create_slider_section(
         "SIZE",
@@ -936,7 +1035,6 @@ fn create_bubble_settings(
 
     grid.attach(&right_col, 1, 0, 1, 1);
 
-    // Behavior Section
     let behavior_label = Label::builder()
         .label("Behavior")
         .css_classes(vec!["title-2"])

@@ -14,8 +14,8 @@ pub enum IconTheme {
 
 pub fn render_tray_icon(theme: IconTheme) -> Vec<Icon> {
     let (fg_color, bg_color) = match theme {
-        IconTheme::Dark => ("#ffffff", "#2e3436"), // White on Dark (Dark Bar)
-        IconTheme::Light => ("#2e3436", "#ffffff"), // Dark on Light (Light Bar)
+        IconTheme::Dark => ("#ffffff", "#2e3436"),
+        IconTheme::Light => ("#2e3436", "#ffffff"),
     };
 
     let svg_str = String::from_utf8_lossy(LOGO_SVG);
@@ -26,7 +26,6 @@ pub fn render_tray_icon(theme: IconTheme) -> Vec<Icon> {
     let bytes = Bytes::from(svg_with_color.as_bytes());
     let stream = MemoryInputStream::from_bytes(&bytes);
 
-    // Standard tray icon size is 22x22 or 24x24
     let size = 22;
 
     match Pixbuf::from_stream_at_scale(&stream, size, size, false, gtk4::gio::Cancellable::NONE) {
@@ -46,7 +45,6 @@ pub fn render_tray_icon(theme: IconTheme) -> Vec<Icon> {
 
             let pixel_slice: &[u8] = pixels.as_ref();
 
-            // Convert RGBA to ARGB for ksni
             let mut argb_data = Vec::with_capacity((width * height * 4) as usize);
 
             for y in 0..height {
@@ -67,7 +65,7 @@ pub fn render_tray_icon(theme: IconTheme) -> Vec<Icon> {
                         let g = pixel_slice[offset + 1];
                         let b = pixel_slice[offset + 2];
 
-                        argb_data.push(255); // Alpha
+                        argb_data.push(255);
                         argb_data.push(r);
                         argb_data.push(g);
                         argb_data.push(b);

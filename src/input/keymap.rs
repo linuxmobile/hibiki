@@ -258,13 +258,11 @@ mod tests {
 
 pub fn map_evdev_to_mechvibes(key: u16) -> Option<u32> {
     match Key::new(key) {
-        // Arrow keys
         Key::KEY_UP => Some(57416),
         Key::KEY_LEFT => Some(57419),
         Key::KEY_RIGHT => Some(57421),
         Key::KEY_DOWN => Some(57424),
 
-        // Navigation / Editing
         Key::KEY_INSERT => Some(57426),
         Key::KEY_DELETE => Some(57427),
         Key::KEY_HOME => Some(57415),
@@ -272,17 +270,14 @@ pub fn map_evdev_to_mechvibes(key: u16) -> Option<u32> {
         Key::KEY_PAGEUP => Some(57417),
         Key::KEY_PAGEDOWN => Some(57425),
 
-        // Modifiers (Right side often differs in Mechvibes)
         Key::KEY_RIGHTALT => Some(57400),
         Key::KEY_RIGHTCTRL => Some(57373),
-        Key::KEY_RIGHTMETA => Some(57435), // Windows key right
-        Key::KEY_LEFTMETA => Some(57435),  // Windows key left (mapped same often)
+        Key::KEY_RIGHTMETA => Some(57435),
+        Key::KEY_LEFTMETA => Some(57435),
 
-        // Keypad (Numpad)
         Key::KEY_KPSLASH => Some(57397),
         Key::KEY_KPENTER => Some(57372),
 
-        // System
         Key::KEY_MUTE => Some(57376),
         Key::KEY_VOLUMEDOWN => Some(57390),
         Key::KEY_VOLUMEUP => Some(57392),
@@ -302,21 +297,17 @@ mod additional_tests {
 
     #[test]
     fn test_map_evdev_to_mechvibes() {
-        // Test Arrow keys
         assert_eq!(map_evdev_to_mechvibes(Key::KEY_UP.code()), Some(57416));
         assert_eq!(map_evdev_to_mechvibes(Key::KEY_DOWN.code()), Some(57424));
 
-        // Test Navigation
         assert_eq!(map_evdev_to_mechvibes(Key::KEY_DELETE.code()), Some(57427));
         assert_eq!(map_evdev_to_mechvibes(Key::KEY_HOME.code()), Some(57415));
 
-        // Test Modifiers
         assert_eq!(
             map_evdev_to_mechvibes(Key::KEY_RIGHTCTRL.code()),
             Some(57373)
         );
 
-        // Test non-mapped key (should return None)
         assert_eq!(map_evdev_to_mechvibes(Key::KEY_A.code()), None);
     }
 }
