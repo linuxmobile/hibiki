@@ -1,4 +1,4 @@
-use crate::input::{is_modifier, is_super_key, KeyDisplay};
+use crate::input::{is_layout_key, is_modifier, is_super_key, KeyDisplay, XkbState};
 use evdev::Key;
 use gtk4::gdk::Texture;
 use gtk4::gdk_pixbuf::Pixbuf;
@@ -8,6 +8,25 @@ use std::collections::{HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
 const LOGO_SVG: &[u8] = include_bytes!("../assets/logo-symbolic.svg");
+
+/// Label shown for a pressed key. Layout-dependent keys (letters, digits,
+/// punctuation) are translated through `xkb_state`, so the visualizer matches
+/// the active layout in both display modes; everything else keeps its symbolic
+/// name.
+fn key_label_from_layout(key: Key, xkb_state: &XkbState) -> String {
+    if is_layout_key(key) {
+        if let Some(utf8) = xkb_state.key_get_utf8(key) {
+            let mut chars = utf8.chars();
+            if let (Some(c), None) = (chars.next(), chars.next()) {
+                if !c.is_control() {
+                    return c.to_string();
+                }
+            }
+        }
+    }
+
+    crate::input::keymap::key_to_display_name(key)
+}
 
 #[derive(Debug)]
 struct DisplayedKey {
@@ -34,6 +53,8 @@ pub struct KeyDisplayWidget {
     display_duration: Duration,
 
     logo_texture: Option<Texture>,
+
+    xkb_state: XkbState,
 }
 
 impl KeyDisplayWidget {
@@ -57,6 +78,7 @@ impl KeyDisplayWidget {
             max_keys,
             display_duration: Duration::from_millis(display_timeout_ms),
             logo_texture,
+            xkb_state: XkbState::default(),
         }
     }
 
@@ -111,13 +133,31 @@ impl KeyDisplayWidget {
         &self.container
     }
 
+    /// Apply a keyboard layout so character keys render what the layout produces.
+    pub fn set_layout(&mut self, layout_name: &str) {
+        self.xkb_state.set_layout(layout_name);
+    }
+
+    /// Resolve the label for a key through the active layout, falling back to the
+    /// symbolic name for keys that do not produce a layout character.
+    fn key_label(&self, key: Key) -> String {
+        key_label_from_layout(key, &self.xkb_state)
+    }
+
     pub fn add_key(&mut self, key: KeyDisplay) {
         self.held_keys.insert(key.key);
 
         if is_modifier(key.key) {
             self.held_modifiers.insert(key.key);
+            if !key.is_repeat {
+                self.xkb_state.update_key(key.key, true);
+            }
 
             return;
+        }
+
+        if !key.is_repeat {
+            self.xkb_state.update_key(key.key, true);
         }
 
         let current_combo = self.get_current_combo(key.key);
@@ -197,7 +237,7 @@ impl KeyDisplayWidget {
                 image.set_valign(gtk4::Align::Center);
                 key_box.append(&image);
             } else {
-                let display_name = crate::input::keymap::key_to_display_name(*key);
+                let display_name = self.key_label(*key);
                 let label = Label::builder()
                     .label(&display_name)
                     .halign(gtk4::Align::Center)
@@ -227,6 +267,8 @@ impl KeyDisplayWidget {
         if is_modifier(key.key) {
             self.held_modifiers.remove(&key.key);
         }
+
+        self.xkb_state.update_key(key.key, false);
 
         for displayed in self.displayed_keys.iter_mut() {
             if displayed.keys.contains(&key.key) {
@@ -286,5 +328,41 @@ impl KeyDisplayWidget {
     #[allow(dead_code)]
     pub fn has_keys(&self) -> bool {
         !self.displayed_keys.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_key_label_uses_layout_for_letters() {
+        let state = XkbState::from_layout_name(Some("English (US)")).unwrap();
+        assert_eq!(key_label_from_layout(Key::KEY_A, &state), "a");
+        assert_eq!(key_label_from_layout(Key::KEY_1, &state), "1");
+    }
+
+    #[test]
+    fn test_key_label_respects_layout_remap() {
+        // On QWERTZ (German) the physical Y/Z keys are swapped.
+        let state = XkbState::from_layout_name(Some("German")).unwrap();
+        assert_eq!(key_label_from_layout(Key::KEY_Y, &state), "z");
+        assert_eq!(key_label_from_layout(Key::KEY_Z, &state), "y");
+    }
+
+    #[test]
+    fn test_key_label_keeps_symbolic_keys() {
+        let state = XkbState::from_layout_name(Some("English (US)")).unwrap();
+        assert_eq!(key_label_from_layout(Key::KEY_LEFTCTRL, &state), "󰘴");
+        assert_eq!(key_label_from_layout(Key::KEY_F1, &state), "F1");
+        assert_eq!(key_label_from_layout(Key::KEY_SPACE, &state), "󱁐");
+    }
+
+    #[test]
+    fn test_key_label_shift_produces_uppercase() {
+        let mut state = XkbState::from_layout_name(Some("English (US)")).unwrap();
+        state.update_key(Key::KEY_LEFTSHIFT, true);
+        assert_eq!(key_label_from_layout(Key::KEY_A, &state), "A");
+        assert_eq!(key_label_from_layout(Key::KEY_2, &state), "@");
     }
 }

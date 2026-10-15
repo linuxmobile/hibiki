@@ -4,7 +4,7 @@ use crate::application::feedback_service::FeedbackService;
 use crate::application::routing::{RoutingEngine, RoutingResult};
 use crate::application::typography_service::TypographyService;
 use crate::compositor::LayoutEvent;
-use crate::domain::CaptureState;
+use crate::domain::{CaptureState, KeystrokeConfig};
 use crate::infrastructure::audio::SoundPackLoader;
 use crate::input::{
     InputControlCommand, KeyEvent, KeyListener, LayoutManager, ListenerConfig, ListenerHandle,
@@ -112,7 +112,13 @@ impl App {
 
         self.gtk_app.connect_activate(move |app| {
             let audio_engine = audio_engine_container.lock().take();
-            activate_without_tray(app, &config_service, audio_dispatcher.clone(), audio_engine, no_ui);
+            activate_without_tray(
+                app,
+                &config_service,
+                audio_dispatcher.clone(),
+                audio_engine,
+                no_ui,
+            );
         });
 
         let exit_code = self.gtk_app.run_with_args::<&str>(&[]);
@@ -447,6 +453,64 @@ fn open_settings(
     show_settings(&settings_window);
 }
 
+/// Shared keyboard-layout detection for both display modes.
+///
+/// Builds a [`LayoutManager`], seeds the caller with the initial layout and
+/// streams later changes to `on_layout` on the GTK main context. The manager is
+/// stored in `state` so it lives (and is torn down) with the mode.
+///
+/// Returns the initial layout name so the caller can apply it immediately,
+/// before any layout event arrives.
+fn setup_layout_tracking<F>(
+    state: &Rc<RefCell<RuntimeState>>,
+    config: &KeystrokeConfig,
+    mode_active: &Arc<AtomicBool>,
+    on_layout: F,
+) -> Option<String>
+where
+    F: Fn(&str) + 'static,
+{
+    if !config.auto_detect_layout {
+        return config.keyboard_layout.clone();
+    }
+
+    let mut layout_manager = LayoutManager::new();
+    if let Err(e) = layout_manager.init() {
+        warn!("Failed to initialize layout detection: {}", e);
+    }
+
+    let initial_layout = config
+        .keyboard_layout
+        .clone()
+        .or_else(|| layout_manager.current_layout_name());
+
+    let (layout_tx, layout_rx) = bounded::<LayoutEvent>(16);
+    layout_manager.start_listener(move |event| {
+        let _ = layout_tx.try_send(event);
+    });
+
+    state.borrow_mut().layout_manager = Some(layout_manager);
+
+    let active = Arc::clone(mode_active);
+    let state_for_task = Rc::clone(state);
+    glib::MainContext::default().spawn_local(async move {
+        while let Ok(event) = layout_rx.recv().await {
+            if !active.load(Ordering::SeqCst) {
+                break;
+            }
+            if state_for_task.borrow().routing_engine.get_states().0 == CaptureState::Paused {
+                continue;
+            }
+            if let LayoutEvent::LayoutSwitched { name, .. } = event {
+                on_layout(&name);
+            }
+        }
+        debug!("Layout event loop terminated");
+    });
+
+    initial_layout
+}
+
 #[allow(clippy::too_many_lines)]
 fn start_keystroke_mode(
     app: &Application,
@@ -499,6 +563,18 @@ fn start_keystroke_mode(
         config.display_timeout_ms,
     )));
 
+    let mode_active = Arc::new(AtomicBool::new(true));
+
+    let display_for_layout = Rc::clone(&display);
+    let initial_layout = setup_layout_tracking(state, &config, &mode_active, move |name| {
+        display_for_layout.borrow_mut().set_layout(name);
+    });
+
+    if let Some(ref name) = initial_layout {
+        info!("Using keyboard layout: {}", name);
+        display.borrow_mut().set_layout(name);
+    }
+
     window.set_child(Some(display.borrow().widget()));
 
     let (sender, receiver) = bounded::<KeyEvent>(1024);
@@ -512,7 +588,6 @@ fn start_keystroke_mode(
     let listener = KeyListener::new(sender, listener_config, audio_dispatcher);
     let handle = listener.start()?;
 
-    let mode_active = Arc::new(AtomicBool::new(true));
     {
         let mut s = state.borrow_mut();
         s.mode_active = Some(Arc::clone(&mode_active));
@@ -700,44 +775,23 @@ fn start_bubble_mode(
         state.borrow_mut().drag_controllers = controllers;
     }
 
-    let mut display_widget = BubbleDisplayWidget::new(config.bubble.timeout_ms);
+    let display = Rc::new(RefCell::new(BubbleDisplayWidget::new(
+        config.bubble.timeout_ms,
+    )));
 
-    let mut layout_manager = if config.auto_detect_layout {
-        let lm = LayoutManager::new();
-        if let Err(e) = lm.init() {
-            warn!("Failed to initialize layout detection: {}", e);
-            None
-        } else {
-            Some(lm)
-        }
-    } else {
-        None
-    };
+    let mode_active = Arc::new(AtomicBool::new(true));
 
-    let initial_layout = if let Some(ref layout) = config.keyboard_layout {
-        Some(layout.clone())
-    } else if let Some(ref lm) = layout_manager {
-        lm.current_layout_name()
-    } else {
-        None
-    };
+    let display_for_layout = Rc::clone(&display);
+    let initial_layout = setup_layout_tracking(state, &config, &mode_active, move |name| {
+        display_for_layout.borrow_mut().set_layout(name);
+    });
 
     if let Some(ref name) = initial_layout {
         info!("Using keyboard layout: {}", name);
-        display_widget.set_layout(name);
+        display.borrow_mut().set_layout(name);
     }
-
-    let display = Rc::new(RefCell::new(display_widget));
 
     window.set_child(Some(display.borrow().widget()));
-
-    let (layout_tx, layout_rx) = bounded::<LayoutEvent>(16);
-    if let Some(ref mut lm) = layout_manager {
-        let tx = layout_tx.clone();
-        lm.start_listener(move |event| {
-            let _ = tx.try_send(event);
-        });
-    }
 
     let (sender, receiver) = bounded::<KeyEvent>(1024);
 
@@ -764,7 +818,6 @@ fn start_bubble_mode(
         s.mode_active = Some(Arc::clone(&mode_active));
         s.listener_handle = Some(handle);
         s.bubble_window = Some(window.clone());
-        s.layout_manager = layout_manager;
     }
 
     let active = Arc::clone(&mode_active);
@@ -841,30 +894,6 @@ fn start_bubble_mode(
             }
         }
         debug!("Bubble event loop terminated");
-    });
-
-    let active = Arc::clone(&mode_active);
-    let state_clone = Rc::clone(state);
-    let display_clone = Rc::clone(&display);
-
-    glib::MainContext::default().spawn_local(async move {
-        while let Ok(event) = layout_rx.recv().await {
-            if !active.load(Ordering::SeqCst) {
-                break;
-            }
-            if state_clone.borrow().routing_engine.get_states().0 == CaptureState::Paused {
-                continue;
-            }
-
-            match event {
-                LayoutEvent::LayoutSwitched { name, .. } => {
-                    info!("Layout switched to: {}", name);
-                    display_clone.borrow_mut().set_layout(&name);
-                }
-                LayoutEvent::LayoutsChanged { .. } => {}
-            }
-        }
-        debug!("Layout event loop terminated");
     });
 
     let _active = Arc::clone(&mode_active);

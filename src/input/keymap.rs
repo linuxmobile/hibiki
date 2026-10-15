@@ -188,6 +188,23 @@ pub fn is_super_key(key: Key) -> bool {
     matches!(key, Key::KEY_LEFTMETA | Key::KEY_RIGHTMETA)
 }
 
+/// Whether a key's printed label should come from the active keyboard layout.
+///
+/// Letters, digits and punctuation are translated through XKB so the visualizer
+/// reflects the layout the user is actually typing on. Keys with a fixed
+/// emblem (modifiers, function keys, arrows, keypad, media keys, ...) keep
+/// their symbolic name, and unmapped keys are translated whenever XKB can.
+#[must_use]
+pub fn is_layout_key(key: Key) -> bool {
+    match KEY_NAMES.get(&key) {
+        Some(name) => {
+            let mut chars = name.chars();
+            matches!((chars.next(), chars.next()), (Some(c), None) if c.is_ascii())
+        }
+        None => true,
+    }
+}
+
 #[allow(dead_code)]
 pub fn normalize_modifier(key: Key) -> Key {
     match key {
@@ -215,6 +232,21 @@ mod tests {
         assert!(is_modifier(Key::KEY_LEFTCTRL));
         assert!(is_modifier(Key::KEY_RIGHTSHIFT));
         assert!(!is_modifier(Key::KEY_A));
+    }
+
+    #[test]
+    fn test_is_layout_key() {
+        assert!(is_layout_key(Key::KEY_A));
+        assert!(is_layout_key(Key::KEY_Z));
+        assert!(is_layout_key(Key::KEY_1));
+        assert!(is_layout_key(Key::KEY_SEMICOLON));
+        assert!(is_layout_key(Key::KEY_102ND));
+
+        assert!(!is_layout_key(Key::KEY_LEFTCTRL));
+        assert!(!is_layout_key(Key::KEY_LEFTSHIFT));
+        assert!(!is_layout_key(Key::KEY_F1));
+        assert!(!is_layout_key(Key::KEY_SPACE));
+        assert!(!is_layout_key(Key::KEY_KP0));
     }
 
     #[test]

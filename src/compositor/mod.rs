@@ -1,6 +1,7 @@
 pub mod hyprland;
 pub mod niri;
 pub mod sway;
+pub mod umbriel;
 
 use std::env;
 use std::fmt;
@@ -12,6 +13,8 @@ pub enum Compositor {
     Sway,
 
     Niri,
+
+    Umbriel,
 
     River,
 
@@ -27,12 +30,18 @@ pub enum Compositor {
 impl Compositor {
     #[must_use]
     pub const fn supports_layout_query(&self) -> bool {
-        matches!(self, Self::Hyprland | Self::Sway | Self::Niri)
+        matches!(
+            self,
+            Self::Hyprland | Self::Sway | Self::Niri | Self::Umbriel
+        )
     }
 
     #[must_use]
     pub const fn supports_layout_events(&self) -> bool {
-        matches!(self, Self::Hyprland | Self::Sway | Self::Niri)
+        matches!(
+            self,
+            Self::Hyprland | Self::Sway | Self::Niri | Self::Umbriel
+        )
     }
 
     #[must_use]
@@ -41,6 +50,7 @@ impl Compositor {
             Self::Hyprland => Some("HYPRLAND_INSTANCE_SIGNATURE"),
             Self::Sway => Some("SWAYSOCK"),
             Self::Niri => Some("NIRI_SOCKET"),
+            Self::Umbriel => Some("UMBRIEL_SOCKET"),
             Self::Wayfire => Some("WAYFIRE_SOCKET"),
             _ => None,
         }
@@ -53,6 +63,7 @@ impl fmt::Display for Compositor {
             Self::Hyprland => write!(f, "Hyprland"),
             Self::Sway => write!(f, "Sway"),
             Self::Niri => write!(f, "Niri"),
+            Self::Umbriel => write!(f, "Umbriel"),
             Self::River => write!(f, "River"),
             Self::Dwl => write!(f, "dwl"),
             Self::Labwc => write!(f, "Labwc"),
@@ -121,6 +132,10 @@ pub fn detect() -> Compositor {
         return Compositor::Niri;
     }
 
+    if env::var_os("UMBRIEL_SOCKET").is_some() {
+        return Compositor::Umbriel;
+    }
+
     if env::var_os("WAYFIRE_SOCKET").is_some() {
         return Compositor::Wayfire;
     }
@@ -147,6 +162,9 @@ pub fn detect() -> Compositor {
         if desktop_lower.contains("niri") {
             return Compositor::Niri;
         }
+        if desktop_lower.contains("umbriel") {
+            return Compositor::Umbriel;
+        }
     }
 
     Compositor::Unknown
@@ -163,6 +181,9 @@ pub fn create_client(compositor: Compositor) -> Option<Box<dyn CompositorClient>
         }
         Compositor::Niri => {
             niri::NiriClient::new().map(|c| Box::new(c) as Box<dyn CompositorClient>)
+        }
+        Compositor::Umbriel => {
+            umbriel::UmbrielClient::new().map(|c| Box::new(c) as Box<dyn CompositorClient>)
         }
         _ => None,
     }
@@ -196,6 +217,7 @@ mod tests {
         assert!(Compositor::Hyprland.supports_layout_query());
         assert!(Compositor::Sway.supports_layout_query());
         assert!(Compositor::Niri.supports_layout_query());
+        assert!(Compositor::Umbriel.supports_layout_query());
         assert!(!Compositor::River.supports_layout_query());
         assert!(!Compositor::Unknown.supports_layout_query());
     }
@@ -205,5 +227,6 @@ mod tests {
         assert_eq!(format!("{}", Compositor::Hyprland), "Hyprland");
         assert_eq!(format!("{}", Compositor::Sway), "Sway");
         assert_eq!(format!("{}", Compositor::Niri), "Niri");
+        assert_eq!(format!("{}", Compositor::Umbriel), "Umbriel");
     }
 }

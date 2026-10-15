@@ -1,6 +1,6 @@
 use crate::compositor::{
-    self, hyprland::HyprlandClient, niri::NiriClient, sway::SwayClient, Compositor,
-    CompositorClient, KeyboardLayouts, LayoutEvent,
+    self, hyprland::HyprlandClient, niri::NiriClient, sway::SwayClient, umbriel::UmbrielClient,
+    Compositor, CompositorClient, KeyboardLayouts, LayoutEvent,
 };
 use std::io::{BufRead, Read};
 use std::sync::{Arc, RwLock};
@@ -139,6 +139,9 @@ impl LayoutManager {
             }
             Compositor::Sway => {
                 Self::listen_sway(layouts, stop_flag, callback);
+            }
+            Compositor::Umbriel => {
+                Self::listen_umbriel(layouts, stop_flag, callback);
             }
             _ => {
                 debug!("No event listener implemented for {}", compositor);
@@ -352,6 +355,65 @@ impl LayoutManager {
         }
 
         debug!("Sway event listener stopped");
+    }
+
+    fn listen_umbriel<F>(
+        layouts: Arc<RwLock<KeyboardLayouts>>,
+        stop_flag: Arc<std::sync::atomic::AtomicBool>,
+        callback: F,
+    ) where
+        F: Fn(LayoutEvent),
+    {
+        let client = match UmbrielClient::new() {
+            Some(c) => c,
+            None => {
+                warn!("Failed to create Umbriel client for event listener");
+                return;
+            }
+        };
+
+        let reader = match client.subscribe_events() {
+            Ok(r) => r,
+            Err(e) => {
+                warn!("Failed to subscribe to Umbriel events: {}", e);
+                return;
+            }
+        };
+
+        for line in reader.lines() {
+            if stop_flag.load(std::sync::atomic::Ordering::SeqCst) {
+                break;
+            }
+
+            let line = match line {
+                Ok(l) => l,
+                Err(e) => {
+                    debug!("Error reading Umbriel event: {}", e);
+                    break;
+                }
+            };
+
+            // Umbriel always sends a full snapshot (names + current index) rather
+            // than a delta, so refresh the cache and surface the active layout as
+            // a switch for the visualizer.
+            if let Some(LayoutEvent::LayoutsChanged {
+                layouts: new_layouts,
+            }) = client.parse_event(&line)
+            {
+                let index = new_layouts.current_idx;
+                let name = new_layouts.current_name().map(String::from);
+
+                if let Ok(mut cached) = layouts.write() {
+                    *cached = new_layouts;
+                }
+
+                if let Some(name) = name {
+                    callback(LayoutEvent::LayoutSwitched { name, index });
+                }
+            }
+        }
+
+        debug!("Umbriel event listener stopped");
     }
 }
 

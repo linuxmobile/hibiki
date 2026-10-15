@@ -32,6 +32,7 @@ Hibiki attempts to automatically detect your running compositor.
 | Compositor    | Support Level           | Notes                                                  |
 | ------------- | ----------------------- | ------------------------------------------------------ |
 | **Niri**      | 🟢 **Tested & Working** | Fully supported layout detection and event handling.   |
+| **Umbriel**   | 🟡 **Experimental**     | IPC-based layout detection and event handling.         |
 | **Hyprland**  | 🟡 **Experimental**     | Implemented but needs community testing.               |
 | **Sway**      | 🟡 **Experimental**     | Implemented but needs community testing.               |
 | **River/DWL** | 🔴 **Basic/None**       | Layout detection may fail; "Basic support" is minimal. |
