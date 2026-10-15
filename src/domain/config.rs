@@ -195,6 +195,12 @@ pub struct KeystrokeConfig {
     /// bubble may hold before a new one is started.
     pub max_combo_keys: usize,
 
+    /// When enabled, consecutive typed characters are merged into a single
+    /// bubble that reads as the word being typed, e.g. `c`, `l`, `e`, `a`, `r`
+    /// becomes one `clear` bubble. Whitespace, enter and shortcuts
+    /// (`ctrl`/`alt`/`super`) still start a fresh bubble.
+    pub unify_words: bool,
+
     pub all_keyboards: bool,
 
     pub font_scale: f64,
@@ -261,6 +267,7 @@ impl Default for KeystrokeConfig {
             separate_duplicate_keys: true,
             combine_modifier_keys: false,
             max_combo_keys: DEFAULT_MAX_COMBO_KEYS,
+            unify_words: false,
             all_keyboards: true,
             font_scale: 1.0,
             opacity: 1.0,

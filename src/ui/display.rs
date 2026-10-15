@@ -28,9 +28,54 @@ fn key_label_from_layout(key: Key, xkb_state: &XkbState) -> String {
     crate::input::keymap::key_to_display_name(key)
 }
 
+/// Whether a key is a command modifier: held alongside a character it forms a
+/// shortcut (`ctrl + c`) rather than typed text, so it must not be folded into a
+/// unified word.
+fn is_command_modifier(key: Key) -> bool {
+    matches!(
+        key,
+        Key::KEY_LEFTCTRL
+            | Key::KEY_RIGHTCTRL
+            | Key::KEY_LEFTALT
+            | Key::KEY_RIGHTALT
+            | Key::KEY_LEFTMETA
+            | Key::KEY_RIGHTMETA
+    )
+}
+
+/// The single printable character a key produces under the active layout, if
+/// any. Returns `None` for keys that do not type text (function keys, arrows,
+/// dead keys, ...), which then keep the regular per-key bubble treatment.
+fn unified_char(key: Key, xkb_state: &XkbState) -> Option<char> {
+    if !is_layout_key(key) {
+        return None;
+    }
+
+    let utf8 = xkb_state.key_get_utf8(key)?;
+    let mut chars = utf8.chars();
+    match (chars.next(), chars.next()) {
+        (Some(c), None) if !c.is_control() => Some(c),
+        _ => None,
+    }
+}
+
+/// Keys that end the word being typed, so the next character starts a new
+/// bubble.
+fn is_word_break_key(key: Key) -> bool {
+    matches!(
+        key,
+        Key::KEY_SPACE | Key::KEY_TAB | Key::KEY_ENTER | Key::KEY_KPENTER
+    )
+}
+
 #[derive(Debug)]
 struct DisplayedKey {
     keys: Vec<Key>,
+
+    /// Set when this bubble is a unified word. Such a bubble renders its
+    /// accumulated text as a single label instead of one widget per key, and
+    /// is not tied to a held key (it fades out after the display duration).
+    text: Option<String>,
 
     /// How many times this exact combination was pressed in a row. Only shown
     /// when duplicate grouping is enabled.
@@ -113,6 +158,8 @@ pub struct KeyDisplayWidget {
 
     max_combo_keys: usize,
 
+    unify_words: bool,
+
     logo_texture: Option<Texture>,
 
     xkb_state: XkbState,
@@ -125,6 +172,7 @@ impl KeyDisplayWidget {
         separate_duplicate_keys: bool,
         combine_modifier_keys: bool,
         max_combo_keys: usize,
+        unify_words: bool,
     ) -> Self {
         let container = GtkBox::builder()
             .orientation(Orientation::Horizontal)
@@ -147,6 +195,7 @@ impl KeyDisplayWidget {
             separate_duplicate_keys,
             combine_modifier_keys,
             max_combo_keys,
+            unify_words,
             logo_texture,
             xkb_state: XkbState::default(),
         }
@@ -231,11 +280,19 @@ impl KeyDisplayWidget {
         }
 
         if key.is_repeat {
-            self.refresh_repeat(key.key);
+            if self.unify_words && is_word_break_key(key.key) {
+                self.unify_word_break();
+            } else {
+                self.refresh_repeat(key.key);
+            }
             return;
         }
 
         self.remove_expired();
+
+        if self.unify_words && self.try_unify(key.key) {
+            return;
+        }
 
         let current_combo = self.get_current_combo(key.key);
 
@@ -271,6 +328,7 @@ impl KeyDisplayWidget {
 
         let displayed = DisplayedKey {
             keys: current_combo,
+            text: None,
             count: 1,
             last_active: Instant::now(),
             is_held: true,
@@ -281,9 +339,114 @@ impl KeyDisplayWidget {
         self.displayed_keys.push_back(displayed);
     }
 
+    /// Try to fold a keypress into the trailing word bubble.
+    ///
+    /// Whitespace finalises the current word and `backspace`/`delete` edit it.
+    /// Returns `true` when the key was consumed as typed text. Shortcuts (a
+    /// `ctrl`/`alt`/`super` is held) and keys that do not type a character
+    /// return `false` so they fall back to the regular per-key bubble logic.
+    fn try_unify(&mut self, key: Key) -> bool {
+        if self.held_modifiers.iter().any(|m| is_command_modifier(*m)) {
+            return false;
+        }
+
+        match key {
+            Key::KEY_BACKSPACE | Key::KEY_DELETE => return self.unify_backspace(),
+            _ if is_word_break_key(key) => return self.unify_word_break(),
+            _ => {}
+        }
+
+        let Some(ch) = unified_char(key, &self.xkb_state) else {
+            return false;
+        };
+
+        if ch.is_whitespace() {
+            return self.unify_word_break();
+        }
+
+        self.unify_append(ch);
+        true
+    }
+
+    /// Append a character to the trailing word, starting a new bubble when the
+    /// previous one was finalised by whitespace or is not a word bubble.
+    fn unify_append(&mut self, ch: char) {
+        let extend = self
+            .displayed_keys
+            .back()
+            .is_some_and(|d| d.text.is_some() && d.extendable);
+
+        if extend {
+            let mut text = self
+                .displayed_keys
+                .back()
+                .and_then(|d| d.text.clone())
+                .unwrap_or_default();
+            text.push(ch);
+            self.replace_last_word(text);
+        } else {
+            self.push_new_word(ch.to_string());
+        }
+    }
+
+    /// Finalise the trailing word so the next character starts a fresh bubble.
+    ///
+    /// The separator is always consumed so it never renders as a key bubble
+    /// while word unification is on, including when it auto-repeats.
+    fn unify_word_break(&mut self) -> bool {
+        let has_word = self
+            .displayed_keys
+            .back()
+            .is_some_and(|d| d.text.is_some() && d.extendable);
+
+        if has_word {
+            if let Some(last) = self.displayed_keys.back_mut() {
+                last.extendable = false;
+                last.last_active = Instant::now();
+            }
+        }
+
+        true
+    }
+
+    /// Remove the last character of the trailing word, dropping the bubble once
+    /// it becomes empty. Returns `true` when a word bubble was affected.
+    fn unify_backspace(&mut self) -> bool {
+        let is_word = self.displayed_keys.back().is_some_and(|d| d.text.is_some());
+
+        if !is_word {
+            return false;
+        }
+
+        let mut text = self
+            .displayed_keys
+            .back()
+            .and_then(|d| d.text.clone())
+            .unwrap_or_default();
+        text.pop();
+
+        if text.is_empty() {
+            if let Some(old) = self.displayed_keys.pop_back() {
+                self.container.remove(&old.widget);
+            }
+        } else {
+            self.replace_last_word(text);
+        }
+
+        true
+    }
+
     /// Keep the trailing bubble alive while a held key auto-repeats.
+    ///
+    /// Word bubbles are not tied to a held key but must not expire while a key
+    /// is still auto-repeating.
     fn refresh_repeat(&mut self, key: Key) {
         if let Some(displayed) = self.displayed_keys.back_mut() {
+            if displayed.text.is_some() {
+                displayed.last_active = Instant::now();
+                return;
+            }
+
             if displayed.keys.last() == Some(&key) {
                 displayed.last_active = Instant::now();
                 displayed.is_held = true;
@@ -294,6 +457,7 @@ impl KeyDisplayWidget {
 
     fn merge_action(&self, current_combo: &[Key]) -> MergeAction {
         match self.displayed_keys.back() {
+            Some(last) if last.text.is_some() => MergeAction::New,
             Some(last) => decide_merge(
                 &last.keys,
                 last.extendable,
@@ -320,10 +484,57 @@ impl KeyDisplayWidget {
 
         self.displayed_keys.push_back(DisplayedKey {
             keys,
+            text: None,
             count,
             last_active: Instant::now(),
             is_held: true,
             extendable: old.extendable,
+            widget,
+        });
+    }
+
+    /// Rebuild the trailing word bubble in place with updated text.
+    fn replace_last_word(&mut self, text: String) {
+        let Some(old) = self.displayed_keys.pop_back() else {
+            return;
+        };
+
+        self.container.remove(&old.widget);
+
+        let widget = self.create_word_widget(&text);
+        self.container.append(&widget);
+
+        self.displayed_keys.push_back(DisplayedKey {
+            keys: Vec::new(),
+            text: Some(text),
+            count: 1,
+            last_active: Instant::now(),
+            is_held: false,
+            extendable: old.extendable,
+            widget,
+        });
+    }
+
+    /// Push a brand new word bubble, trimming the oldest bubble when the visible
+    /// key limit is reached.
+    fn push_new_word(&mut self, text: String) {
+        while self.displayed_keys.len() >= self.max_keys {
+            if let Some(old) = self.displayed_keys.pop_front() {
+                self.container.remove(&old.widget);
+            }
+        }
+
+        let widget = self.create_word_widget(&text);
+
+        self.container.append(&widget);
+
+        self.displayed_keys.push_back(DisplayedKey {
+            keys: Vec::new(),
+            text: Some(text),
+            count: 1,
+            last_active: Instant::now(),
+            is_held: false,
+            extendable: true,
             widget,
         });
     }
@@ -403,6 +614,29 @@ impl KeyDisplayWidget {
         } else {
             Image::new()
         }
+    }
+
+    /// Build a bubble that renders a unified word as a single label.
+    fn create_word_widget(&self, text: &str) -> Widget {
+        let key_box = GtkBox::builder()
+            .orientation(Orientation::Horizontal)
+            .spacing(6)
+            .halign(gtk4::Align::Center)
+            .valign(gtk4::Align::Center)
+            .hexpand(false)
+            .build();
+        key_box.add_css_class("keystroke-key");
+        key_box.add_css_class("word");
+
+        let label = Label::builder()
+            .label(text)
+            .halign(gtk4::Align::Center)
+            .valign(gtk4::Align::Center)
+            .hexpand(true)
+            .build();
+        key_box.append(&label);
+
+        key_box.upcast()
     }
 
     pub fn remove_key(&mut self, key: &KeyDisplay) {
@@ -486,6 +720,11 @@ impl KeyDisplayWidget {
     #[allow(dead_code)]
     pub fn set_max_combo_keys(&mut self, max_combo_keys: usize) {
         self.max_combo_keys = max_combo_keys;
+    }
+
+    #[allow(dead_code)]
+    pub fn set_unify_words(&mut self, unify: bool) {
+        self.unify_words = unify;
     }
 
     #[allow(dead_code)]
@@ -660,5 +899,59 @@ mod tests {
             MAX,
         );
         assert_eq!(action, MergeAction::New);
+    }
+
+    #[test]
+    fn command_modifiers_are_detected() {
+        assert!(is_command_modifier(Key::KEY_LEFTCTRL));
+        assert!(is_command_modifier(Key::KEY_RIGHTCTRL));
+        assert!(is_command_modifier(Key::KEY_LEFTALT));
+        assert!(is_command_modifier(Key::KEY_RIGHTALT));
+        assert!(is_command_modifier(Key::KEY_LEFTMETA));
+        assert!(is_command_modifier(Key::KEY_RIGHTMETA));
+
+        assert!(!is_command_modifier(Key::KEY_LEFTSHIFT));
+        assert!(!is_command_modifier(Key::KEY_RIGHTSHIFT));
+        assert!(!is_command_modifier(Key::KEY_A));
+        assert!(!is_command_modifier(Key::KEY_SPACE));
+    }
+
+    #[test]
+    fn word_break_keys_are_detected() {
+        assert!(is_word_break_key(Key::KEY_SPACE));
+        assert!(is_word_break_key(Key::KEY_TAB));
+        assert!(is_word_break_key(Key::KEY_ENTER));
+        assert!(is_word_break_key(Key::KEY_KPENTER));
+
+        assert!(!is_word_break_key(Key::KEY_A));
+        assert!(!is_word_break_key(Key::KEY_BACKSPACE));
+        assert!(!is_word_break_key(Key::KEY_LEFTCTRL));
+    }
+
+    #[test]
+    fn unified_char_uses_layout() {
+        let state = XkbState::from_layout_name(Some("English (US)")).unwrap();
+        assert_eq!(unified_char(Key::KEY_A, &state), Some('a'));
+        assert_eq!(unified_char(Key::KEY_1, &state), Some('1'));
+        assert_eq!(unified_char(Key::KEY_SEMICOLON, &state), Some(';'));
+
+        assert_eq!(unified_char(Key::KEY_F1, &state), None);
+        assert_eq!(unified_char(Key::KEY_LEFTCTRL, &state), None);
+        assert_eq!(unified_char(Key::KEY_SPACE, &state), None);
+    }
+
+    #[test]
+    fn unified_char_respects_shift() {
+        let mut state = XkbState::from_layout_name(Some("English (US)")).unwrap();
+        state.update_key(Key::KEY_LEFTSHIFT, true);
+        assert_eq!(unified_char(Key::KEY_A, &state), Some('A'));
+        assert_eq!(unified_char(Key::KEY_1, &state), Some('!'));
+    }
+
+    #[test]
+    fn unified_char_respects_layout_remap() {
+        let state = XkbState::from_layout_name(Some("German")).unwrap();
+        assert_eq!(unified_char(Key::KEY_Y, &state), Some('z'));
+        assert_eq!(unified_char(Key::KEY_Z, &state), Some('y'));
     }
 }

@@ -556,6 +556,7 @@ fn start_keystroke_mode(
         config.separate_duplicate_keys,
         config.combine_modifier_keys,
         config.max_combo_keys,
+        config.unify_words,
     )));
 
     let mode_active = Arc::new(AtomicBool::new(true));
@@ -691,6 +692,7 @@ fn start_keystroke_mode(
                 disp.set_separate_duplicate_keys(cfg.separate_duplicate_keys);
                 disp.set_combine_modifier_keys(cfg.combine_modifier_keys);
                 disp.set_max_combo_keys(cfg.max_combo_keys);
+                disp.set_unify_words(cfg.unify_words);
             }
 
             if let Some(provider) = &state_c.borrow().css_provider {

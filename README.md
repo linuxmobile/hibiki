@@ -11,6 +11,7 @@ And yes, it's written in Rust, so you already know it's blazing fast and memory-
 - **Wayland Native**: No more X11 workarounds; built to work with modern compositors.
 - **Two Display Modes**:
   - **Keystroke**: The classic view for showing exactly what you're hitting.
+    - **Unify Words**: Optionally fold consecutive typed characters into a single bubble per word (`c`, `l`, `e`, `a`, `r` → `clear`) to cut down on clutter.
   - **Bubble**: A sleek, minimal style inspired by [devaslife's setup](https://www.youtube.com/watch?v=zu_vqAWHy_E).
 - **Native Audio Engine**:
   - Built-in `rodio`-based audio engine on a dedicated thread.

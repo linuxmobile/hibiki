@@ -636,33 +636,6 @@ fn create_keystroke_settings(
     dur_box.append(&dur_scale);
     b_left.append(&dur_box);
 
-    let max_box = GtkBox::new(Orientation::Horizontal, 12);
-    max_box.set_valign(Align::Center);
-    let max_label = Label::builder()
-        .label("Max Visible Keys")
-        .css_classes(vec!["body"])
-        .hexpand(true)
-        .xalign(0.0)
-        .build();
-    max_box.append(&max_label);
-
-    let stepper_box = GtkBox::new(Orientation::Horizontal, 0);
-    stepper_box.add_css_class("linked");
-
-    let step_minus = Button::builder().label("-").width_request(32).build();
-    let step_display = Button::builder()
-        .label(config.max_keys.to_string())
-        .width_request(40)
-        .can_focus(false)
-        .build();
-    let step_plus = Button::builder().label("+").width_request(32).build();
-
-    stepper_box.append(&step_minus);
-    stepper_box.append(&step_display);
-    stepper_box.append(&step_plus);
-    max_box.append(&stepper_box);
-    b_left.append(&max_box);
-
     let drag_box = GtkBox::new(Orientation::Horizontal, 12);
     let drag_text = GtkBox::new(Orientation::Vertical, 2);
     drag_text.set_hexpand(true);
@@ -735,32 +708,29 @@ fn create_keystroke_settings(
     combine_box.append(&combine_switch);
     b_left.append(&combine_box);
 
-    let combo_limit_box = GtkBox::new(Orientation::Horizontal, 12);
-    combo_limit_box.set_valign(Align::Center);
-    let combo_limit_label = Label::builder()
-        .label("Max Combined Keys")
-        .css_classes(vec!["body"])
-        .hexpand(true)
+    let unify_box = GtkBox::new(Orientation::Horizontal, 12);
+    let unify_text = GtkBox::new(Orientation::Vertical, 2);
+    unify_text.set_hexpand(true);
+    let unify_lbl = Label::builder()
+        .label("Unify Words")
         .xalign(0.0)
+        .css_classes(vec!["body"])
         .build();
-    combo_limit_box.append(&combo_limit_label);
-
-    let combo_stepper = GtkBox::new(Orientation::Horizontal, 0);
-    combo_stepper.add_css_class("linked");
-
-    let combo_minus = Button::builder().label("-").width_request(32).build();
-    let combo_display = Button::builder()
-        .label(config.max_combo_keys.to_string())
-        .width_request(40)
-        .can_focus(false)
+    let unify_sub = Label::builder()
+        .label("Group typed characters into one bubble per word")
+        .xalign(0.0)
+        .css_classes(vec!["caption", "dim-label"])
         .build();
-    let combo_plus = Button::builder().label("+").width_request(32).build();
+    unify_text.append(&unify_lbl);
+    unify_text.append(&unify_sub);
+    unify_box.append(&unify_text);
 
-    combo_stepper.append(&combo_minus);
-    combo_stepper.append(&combo_display);
-    combo_stepper.append(&combo_plus);
-    combo_limit_box.append(&combo_stepper);
-    b_left.append(&combo_limit_box);
+    let unify_switch = Switch::builder()
+        .active(config.unify_words)
+        .valign(Align::Center)
+        .build();
+    unify_box.append(&unify_switch);
+    b_left.append(&unify_box);
 
     behavior_grid.attach(&b_left, 0, 0, 1, 1);
 
@@ -808,6 +778,63 @@ fn create_keystroke_settings(
     card_content.append(&hk2_box);
 
     b_right.append(&card_content);
+
+    let combo_limit_box = GtkBox::new(Orientation::Horizontal, 12);
+    combo_limit_box.set_valign(Align::Center);
+    combo_limit_box.set_margin_top(24);
+    let combo_limit_label = Label::builder()
+        .label("Max Combined Keys")
+        .css_classes(vec!["body"])
+        .hexpand(true)
+        .xalign(0.0)
+        .build();
+    combo_limit_box.append(&combo_limit_label);
+
+    let combo_stepper = GtkBox::new(Orientation::Horizontal, 0);
+    combo_stepper.add_css_class("linked");
+
+    let combo_minus = Button::builder().label("-").width_request(32).build();
+    let combo_display = Button::builder()
+        .label(config.max_combo_keys.to_string())
+        .width_request(40)
+        .can_focus(false)
+        .build();
+    let combo_plus = Button::builder().label("+").width_request(32).build();
+
+    combo_stepper.append(&combo_minus);
+    combo_stepper.append(&combo_display);
+    combo_stepper.append(&combo_plus);
+    combo_limit_box.append(&combo_stepper);
+    b_right.append(&combo_limit_box);
+
+    let max_box = GtkBox::new(Orientation::Horizontal, 12);
+    max_box.set_valign(Align::Center);
+    max_box.set_margin_top(24);
+    let max_label = Label::builder()
+        .label("Max Visible Keys")
+        .css_classes(vec!["body"])
+        .hexpand(true)
+        .xalign(0.0)
+        .build();
+    max_box.append(&max_label);
+
+    let stepper_box = GtkBox::new(Orientation::Horizontal, 0);
+    stepper_box.add_css_class("linked");
+
+    let step_minus = Button::builder().label("-").width_request(32).build();
+    let step_display = Button::builder()
+        .label(config.max_keys.to_string())
+        .width_request(40)
+        .can_focus(false)
+        .build();
+    let step_plus = Button::builder().label("+").width_request(32).build();
+
+    stepper_box.append(&step_minus);
+    stepper_box.append(&step_display);
+    stepper_box.append(&step_plus);
+    max_box.append(&stepper_box);
+    b_right.append(&max_box);
+
     behavior_grid.attach(&b_right, 1, 0, 1, 1);
 
     let service_c = config_service.clone();
@@ -870,6 +897,16 @@ fn create_keystroke_settings(
         let mut cfg = service_c.get_config();
         if cfg.combine_modifier_keys != state {
             cfg.combine_modifier_keys = state;
+            let _ = service_c.update_config(cfg);
+        }
+        glib::Propagation::Proceed
+    });
+
+    let service_c = config_service.clone();
+    unify_switch.connect_state_set(move |_, state| {
+        let mut cfg = service_c.get_config();
+        if cfg.unify_words != state {
+            cfg.unify_words = state;
             let _ = service_c.update_config(cfg);
         }
         glib::Propagation::Proceed
