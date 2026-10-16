@@ -1,6 +1,6 @@
 [package]
 name = "hibiki"
-version = "0.1.5"
+version = "0.2.0"
 edition = "2021"
 authors = ["linuxmobile"]
 description = "Elevating the tactile dialogue. A high-fidelity visual and auditory companion that gives your keystrokes a modern resonance."

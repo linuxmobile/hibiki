@@ -1,6 +1,6 @@
 # Maintainer: linuxmobile <linuxmobile@users.noreply.github.com>
 pkgname=hibiki
-pkgver=0.1.5
+pkgver=0.2.0
 pkgrel=1
 pkgdesc="A high-fidelity keystroke and bubble visualizer for Wayland"
 arch=('x86_64' 'aarch64')

@@ -81,7 +81,7 @@ This downloads the prebuilt binary for your architecture and installs it to
 curl -fsSL .../install.sh | bash -s -- --system
 
 # pin a specific release
-curl -fsSL .../install.sh | bash -s -- --version v0.1.5
+curl -fsSL .../install.sh | bash -s -- --version v0.2.0
 
 # remove it again
 curl -fsSL .../install.sh | bash -s -- --uninstall
