@@ -56,6 +56,25 @@ fn unify_edits_word(key: Key) -> bool {
     matches!(key, Key::KEY_BACKSPACE)
 }
 
+fn is_word_joiner(ch: char) -> bool {
+    matches!(ch, '\'' | '\u{2019}' | '-' | '\u{2010}')
+}
+
+/// Letters extend a word; `'`/`-` extend only after a letter. Anything else breaks it.
+fn can_extend_word(current: Option<&str>, ch: char) -> bool {
+    if ch.is_alphabetic() {
+        return true;
+    }
+
+    if !is_word_joiner(ch) {
+        return false;
+    }
+
+    current
+        .and_then(|text| text.chars().last())
+        .is_some_and(char::is_alphabetic)
+}
+
 fn is_word_break_key(key: Key) -> bool {
     matches!(
         key,
@@ -397,30 +416,33 @@ impl KeyDisplayWidget {
             return self.unify_word_break();
         }
 
-        self.unify_append(ch);
+        if !self.unify_append(ch) {
+            self.unify_word_break();
+            return false;
+        }
+
         true
     }
 
-    fn unify_append(&mut self, ch: char) {
-        let extend = self
+    fn unify_append(&mut self, ch: char) -> bool {
+        let current: Option<String> = self
             .displayed_keys
             .back()
-            .is_some_and(|d| d.text.is_some() && d.extendable);
+            .filter(|d| d.text.is_some() && d.extendable)
+            .and_then(|d| d.text.clone());
 
-        if extend {
-            let mut text = self
-                .displayed_keys
-                .back()
-                .and_then(|d| d.text.clone())
-                .unwrap_or_default();
+        if !can_extend_word(current.as_deref(), ch) {
+            return false;
+        }
 
+        if let Some(mut text) = current {
             if text.chars().count() >= self.max_word_length {
                 if let Some(last) = self.displayed_keys.back_mut() {
                     last.extendable = false;
                     last.last_active = Instant::now();
                 }
                 self.push_new_word(ch.to_string());
-                return;
+                return true;
             }
 
             text.push(ch);
@@ -428,6 +450,8 @@ impl KeyDisplayWidget {
         } else {
             self.push_new_word(ch.to_string());
         }
+
+        true
     }
 
     /// Closes the current word so the next character starts a fresh bubble.
@@ -1092,5 +1116,53 @@ mod tests {
         let state = XkbState::from_layout_name(Some("German")).unwrap();
         assert_eq!(unified_char(Key::KEY_Y, &state), Some('z'));
         assert_eq!(unified_char(Key::KEY_Z, &state), Some('y'));
+    }
+
+    #[test]
+    fn word_joiners_are_only_apostrophes_and_hyphens() {
+        assert!(is_word_joiner('\''));
+        assert!(is_word_joiner('\u{2019}'));
+        assert!(is_word_joiner('-'));
+        assert!(is_word_joiner('\u{2010}'));
+
+        assert!(!is_word_joiner('%'));
+        assert!(!is_word_joiner('_'));
+        assert!(!is_word_joiner(' '));
+        assert!(!is_word_joiner('a'));
+    }
+
+    #[test]
+    fn letters_start_and_extend_words() {
+        assert!(can_extend_word(None, 'a'));
+        assert!(can_extend_word(Some("hell"), 'o'));
+        assert!(can_extend_word(Some("caf"), 'é'));
+    }
+
+    #[test]
+    fn joiners_extend_words_only_after_a_letter() {
+        assert!(can_extend_word(Some("someth"), '\''));
+        assert!(can_extend_word(Some("dah"), '\''));
+        assert!(can_extend_word(Some("dah"), '\u{2019}'));
+        assert!(can_extend_word(Some("well"), '-'));
+        assert!(can_extend_word(Some("don"), '\''));
+    }
+
+    #[test]
+    fn joiners_break_words_when_not_between_letters() {
+        assert!(!can_extend_word(None, '\''));
+        assert!(!can_extend_word(None, '-'));
+        assert!(!can_extend_word(Some("ab-"), '\''));
+        assert!(!can_extend_word(Some("ab-"), '-'));
+    }
+
+    #[test]
+    fn digits_and_symbols_break_words() {
+        for ch in ['%', '1', '7', '_', '#', '@', '=', '/', '.', ','] {
+            assert!(
+                !can_extend_word(Some("abc"), ch),
+                "{ch:?} must not be folded into a word"
+            );
+            assert!(!can_extend_word(None, ch), "{ch:?} must not start a word");
+        }
     }
 }
