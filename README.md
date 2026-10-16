@@ -65,6 +65,82 @@ cargo install --path .
 cargo run --release
 ```
 
+### Via the install script (prebuilt binary)
+
+The fastest way on any Linux system:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/linuxmobile/hibiki/main/install.sh | bash
+```
+
+This downloads the prebuilt binary for your architecture and installs it to
+`~/.local/bin` together with a desktop entry and icon. Useful options:
+
+```bash
+# install system-wide to /usr/local (uses sudo)
+curl -fsSL .../install.sh | bash -s -- --system
+
+# pin a specific release
+curl -fsSL .../install.sh | bash -s -- --version v0.1.5
+
+# remove it again
+curl -fsSL .../install.sh | bash -s -- --uninstall
+```
+
+The script detects your package manager (pacman/apt/dnf) and tells you which
+runtime libraries are missing, and it checks that your glibc is new enough for
+the binary.
+
+> **Debian / Ubuntu:** the prebuilt binary needs a system
+> `gtk4-layer-shell`, which is only packaged on Ubuntu 25.10+ and Debian 13+.
+> On older releases (Ubuntu 24.04, Debian 12) use the **AppImage** below —
+> it bundles GTK, gtk4-layer-shell and everything else.
+
+### Via AppImage
+
+A self-contained AppImage is attached to every release. It needs no GTK or
+gtk4-layer-shell from the system, so it works on any distro with a recent
+glibc:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/linuxmobile/hibiki/main/install.sh | bash -s -- --appimage
+```
+
+Or grab `hibiki-<version>-<arch>.AppImage` from the
+[releases page](https://github.com/linuxmobile/hibiki/releases), then:
+
+```bash
+chmod +x hibiki-*-x86_64.AppImage
+./hibiki-*-x86_64.AppImage
+```
+
+If your system has no FUSE, run it with `--appimage-extract-and-run`.
+
+After installing either way, add your user to the `input` group so Hibiki can
+read the keyboard devices (then log out and back in):
+
+```bash
+sudo usermod -aG input "$USER"
+```
+
+### Arch Linux
+
+`PKGBUILDs` are included under `packaging/arch/`:
+
+- `packaging/arch/PKGBUILD` — builds from source (`hibiki`).
+- `packaging/arch/hibiki-bin/PKGBUILD` — installs the prebuilt binary
+  (`hibiki-bin`).
+
+Build and install either with:
+
+```bash
+cd packaging/arch
+makepkg -si
+```
+
+When a new version is released, bump `pkgver` and run `updpkgsums` before
+building. An AUR package is on the way.
+
 ### Via Nix
 
 Flake support is included!

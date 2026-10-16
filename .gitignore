@@ -1,3 +1,5 @@
 target/
 result
 .direnv/
+dist/
+.appimage-tools/

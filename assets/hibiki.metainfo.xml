@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>hibiki</id>
+
+  <name>Hibiki</name>
+  <summary>A high-fidelity keystroke and bubble visualizer for Wayland</summary>
+
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+
+  <developer id="io.github.linuxmobile">
+    <name>linuxmobile</name>
+  </developer>
+
+  <description>
+    <p>
+      Hibiki is a GTK4 Layer Shell keystroke visualizer built specifically for
+      Wayland compositors. It shows what you type in a clean, modern overlay,
+      which is perfect for screencasts, presentations, or pairing with
+      mechanical-keyboard sounds.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>Two display modes: classic keystroke bubbles and a minimal bubble style</li>
+      <li>Optional unify-words grouping and repeated-key handling</li>
+      <li>Built-in Mechvibes-compatible audio engine and sound packs</li>
+      <li>Customizable typography, colors, and the Super-key icon</li>
+      <li>System tray, CLI control, and global hotkeys</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">hibiki.desktop</launchable>
+
+  <url type="homepage">https://github.com/linuxmobile/hibiki</url>
+  <url type="bugtracker">https://github.com/linuxmobile/hibiki/issues</url>
+  <url type="vcs-browser">https://github.com/linuxmobile/hibiki</url>
+
+  <categories>
+    <category>Utility</category>
+  </categories>
+
+  <keywords>
+    <keyword>keystroke</keyword>
+    <keyword>keyboard</keyword>
+    <keyword>visualizer</keyword>
+    <keyword>screencast</keyword>
+  </keywords>
+
+  <content_rating type="oars-1.1"/>
+
+  <releases>
+    <release version="0.1.5" date="2026-02-09"/>
+  </releases>
+</component>

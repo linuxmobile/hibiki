@@ -65,6 +65,7 @@ in {
   # Install desktop entry and icon
   postInstall = ''
     install -Dm444 ${../assets/hibiki.desktop} $out/share/applications/hibiki.desktop
+    install -Dm444 ${../assets/hibiki.metainfo.xml} $out/share/metainfo/hibiki.metainfo.xml
     install -Dm444 ${../assets/hibiki.svg} $out/share/icons/hicolor/scalable/apps/hibiki.svg
   '';
 

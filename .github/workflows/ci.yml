@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -50,12 +51,12 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-24.04
-            artifact_name: keystroke-linux-x86_64
-            bin_name: keystroke
+            artifact_name: hibiki-linux-x86_64
+            bin_name: hibiki
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-24.04-arm
-            artifact_name: keystroke-linux-aarch64
-            bin_name: keystroke
+            artifact_name: hibiki-linux-aarch64
+            bin_name: hibiki
 
     steps:
       - uses: actions/checkout@v4
@@ -97,17 +98,76 @@ jobs:
           name: ${{ matrix.artifact_name }}
           path: staging/${{ matrix.artifact_name }}
 
+  appimage:
+    name: Build AppImage (${{ matrix.arch }})
+    needs: check
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            os: ubuntu-24.04
+          - arch: aarch64
+            os: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-4-dev libdbus-1-dev libasound2-dev libudev-dev libxkbcommon-dev libjack-dev pkg-config meson ninja-build git libwayland-dev wayland-protocols libgirepository1.0-dev valac librsvg2-dev
+
+      - name: Build and install gtk4-layer-shell
+        run: |
+          git clone https://github.com/wmww/gtk4-layer-shell
+          cd gtk4-layer-shell
+          meson setup build
+          ninja -C build
+          sudo ninja -C build install
+          sudo ldconfig
+
+      - name: Build Release
+        run: cargo build --release --locked
+
+      - name: Build AppImage
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            export VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          APPIMAGE_ARCH=${{ matrix.arch }} ./packaging/appimage/build-appimage.sh
+
+      - name: Upload AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: hibiki-appimage-${{ matrix.arch }}
+          path: dist/*.AppImage
+
   release:
     name: Create Release
-    needs: build
+    needs: [build, appimage]
+    if: ${{ always() && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - name: Download binaries
+        uses: actions/download-artifact@v4
         with:
           path: artifacts
-          pattern: keystroke-*
+          pattern: hibiki-linux-*
+          merge-multiple: true
+
+      - name: Download AppImages
+        if: ${{ needs.appimage.result == 'success' }}
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: hibiki-appimage-*
           merge-multiple: true
 
       - name: List artifacts
