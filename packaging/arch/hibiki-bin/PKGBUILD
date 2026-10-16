@@ -29,13 +29,11 @@ source=(
 source_x86_64=("hibiki-linux-x86_64::$url/releases/download/v$pkgver/hibiki-linux-x86_64")
 source_aarch64=("hibiki-linux-aarch64::$url/releases/download/v$pkgver/hibiki-linux-aarch64")
 
-sha256sums=(
-  'da01c0746c15fd2e6a322ee3cc0eb302a0b01dbc770e0c712b864d5075327223'
-  '1d0fa6f8edeb97da66fe2763b49d4c41409316294f484f9e75047dd65346fff2'
-  '03442ace9a725cfc3101af42d1ce8d43539e685a98a11fa989e76d2709521ebb'
-)
-sha256sums_x86_64=('SKIP')
-sha256sums_aarch64=('SKIP')
+sha256sums=('da01c0746c15fd2e6a322ee3cc0eb302a0b01dbc770e0c712b864d5075327223'
+            '1d0fa6f8edeb97da66fe2763b49d4c41409316294f484f9e75047dd65346fff2'
+            '03442ace9a725cfc3101af42d1ce8d43539e685a98a11fa989e76d2709521ebb')
+sha256sums_x86_64=('584cf14d6d5f715da95046f20c810d1e91bf383fcf53393344fe7af22b09a079')
+sha256sums_aarch64=('d09b4f93c1551dbd739667226140c89e61a407a075571fa5a7da317fd36a2239')
 
 package() {
   install -Dm755 "$srcdir/hibiki-linux-$CARCH" "$pkgdir/usr/bin/hibiki"
