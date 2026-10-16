@@ -19,6 +19,8 @@ OPTIONS:
         --bubble            Alias for --bubble-toggle
     -t, --toggle            Toggle between keystroke and bubble mode
     -p, --pause-toggle      Pause or resume key capture
+        --sound-toggle      Enable or disable key switch sounds
+        --visual-toggle     Show or hide the on-screen visualizer
         --settings          Open the settings window
         --launcher          Show the launcher window
         --quit              Quit the running instance
@@ -31,6 +33,7 @@ be bound to compositor shortcuts, e.g. on Hyprland:
     bind = SUPER, K, exec, hibiki --keystroke-toggle
     bind = SUPER, B, exec, hibiki --bubble-toggle
     bind = SUPER, P, exec, hibiki --pause-toggle
+    bind = SUPER, S, exec, hibiki --sound-toggle
 ";
 
 fn main() -> Result<()> {

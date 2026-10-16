@@ -5,7 +5,6 @@ use crate::application::routing::{RoutingEngine, RoutingResult};
 use crate::application::typography_service::TypographyService;
 use crate::compositor::LayoutEvent;
 use crate::domain::{CaptureState, KeystrokeConfig};
-use crate::infrastructure::audio::SoundPackLoader;
 use crate::input::{
     InputControlCommand, KeyEvent, KeyListener, LayoutManager, ListenerConfig, ListenerHandle,
 };
@@ -21,6 +20,7 @@ use gtk4::glib::{self, ControlFlow};
 use gtk4::prelude::*;
 use gtk4::{Application, ApplicationWindow, CssProvider};
 use parking_lot::Mutex;
+use std::cell::Cell;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -53,6 +53,7 @@ struct RuntimeState {
     launcher_window: Option<ApplicationWindow>,
     settings_window: Option<ApplicationWindow>,
     mode_active: Option<Arc<AtomicBool>>,
+    visual_enabled: Option<Rc<Cell<bool>>>,
     listener_handle: Option<ListenerHandle>,
     layout_manager: Option<LayoutManager>,
     feedback_service: Option<FeedbackService>,
@@ -179,7 +180,7 @@ impl App {
 /// forwarded to an already-running instance.
 fn register_cli_options(app: &Application) {
     let none = glib::Char(0);
-    let entries: [(&str, glib::Char, &str); 10] = [
+    let entries: [(&str, glib::Char, &str); 12] = [
         (
             "keystroke-toggle",
             glib::Char::from(b'k'),
@@ -201,6 +202,12 @@ fn register_cli_options(app: &Application) {
             "pause-toggle",
             glib::Char::from(b'p'),
             "Pause or resume key capture",
+        ),
+        ("sound-toggle", none, "Enable or disable key switch sounds"),
+        (
+            "visual-toggle",
+            none,
+            "Show or hide the on-screen visualizer",
         ),
         ("settings", none, "Open the settings window"),
         ("launcher", none, "Show the launcher window"),
@@ -256,6 +263,12 @@ fn actions_from_flags(is_set: impl Fn(&str) -> bool) -> Vec<AppAction> {
     }
     if is_set("quit") {
         actions.push(AppAction::Quit);
+    }
+    if is_set("sound-toggle") {
+        actions.push(AppAction::ToggleSound);
+    }
+    if is_set("visual-toggle") {
+        actions.push(AppAction::ToggleVisual);
     }
 
     actions
@@ -477,6 +490,7 @@ fn close_mode_windows(state: &Rc<RefCell<RuntimeState>>) {
 
     s.listener_handle = None;
     s.layout_manager = None;
+    s.visual_enabled = None;
 
     if let Some(window) = &s.keystroke_window {
         for controller in &s.drag_controllers {
@@ -631,6 +645,35 @@ fn handle_app_action(
                 if paused { "paused" } else { "resumed" }
             );
         }
+        AppAction::ToggleSound => {
+            debug!("Handling ToggleSound action");
+            let mut cfg = config_service.get_config();
+            cfg.sound.enabled = !cfg.sound.enabled;
+            let enabled = cfg.sound.enabled;
+            let _ = config_service.update_config(cfg);
+            info!(
+                "Key switch sounds {}",
+                if enabled { "enabled" } else { "disabled" }
+            );
+        }
+        AppAction::ToggleVisual => {
+            debug!("Handling ToggleVisual action");
+            let mut cfg = config_service.get_config();
+            cfg.show_visual = !cfg.show_visual;
+            let show = cfg.show_visual;
+            let _ = config_service.update_config(cfg);
+
+            if !show {
+                let s = state.borrow();
+                for window in [s.keystroke_window.as_ref(), s.bubble_window.as_ref()]
+                    .into_iter()
+                    .flatten()
+                {
+                    window.set_visible(false);
+                }
+            }
+            info!("Visualizer {}", if show { "shown" } else { "hidden" });
+        }
         AppAction::Quit => {
             debug!("Handling Quit action");
             app.quit();
@@ -736,7 +779,7 @@ fn start_keystroke_mode(
 
     if let Some(dispatcher) = &state.borrow().audio_dispatcher {
         let current_pack = dispatcher.get_current_pack_name();
-        let target_pack = &config.audio.sound_pack;
+        let target_pack = &config.sound.sound_pack;
 
         info!(
             "Current pack: {:?}, Target pack: {}",
@@ -744,15 +787,14 @@ fn start_keystroke_mode(
         );
 
         if current_pack.is_none() || current_pack.as_deref() != Some(target_pack.as_str()) {
-            let path = SoundPackLoader::get_sound_pack_dir().join(target_pack);
-            info!("Loading initial sound pack from: {:?}", path);
-            if let Err(e) = dispatcher.load_pack(path) {
+            info!("Loading initial sound pack: {}", target_pack);
+            if let Err(e) = dispatcher.load_pack(target_pack, config.sound.folder.as_deref()) {
                 warn!("Failed to load sound pack '{}': {}", target_pack, e);
             }
         }
 
-        dispatcher.set_enabled(config.audio.enabled);
-        dispatcher.set_volume(config.audio.volume);
+        dispatcher.set_enabled(config.sound.enabled);
+        dispatcher.set_volume(config.sound.volume);
     }
 
     {
@@ -770,6 +812,7 @@ fn start_keystroke_mode(
     let display = Rc::new(RefCell::new(KeyDisplayWidget::new(&config)));
 
     let mode_active = Arc::new(AtomicBool::new(true));
+    let visual_enabled = Rc::new(Cell::new(config.show_visual));
 
     let display_for_layout = Rc::clone(&display);
     let initial_layout = setup_layout_tracking(state, &config, &mode_active, move |name| {
@@ -797,6 +840,7 @@ fn start_keystroke_mode(
     {
         let mut s = state.borrow_mut();
         s.mode_active = Some(Arc::clone(&mode_active));
+        s.visual_enabled = Some(Rc::clone(&visual_enabled));
         s.listener_handle = Some(handle);
         s.keystroke_window = Some(window.clone());
     }
@@ -865,6 +909,7 @@ fn start_keystroke_mode(
     let window_c = window.clone();
     let state_c = state.clone();
     let active_c = Arc::clone(&mode_active);
+    let visual_c = Rc::clone(&visual_enabled);
 
     glib::MainContext::default().spawn_local(async move {
         while rx.changed().await.is_ok() {
@@ -881,15 +926,14 @@ fn start_keystroke_mode(
             );
 
             if let Some(dispatcher) = &state_c.borrow().audio_dispatcher {
-                dispatcher.set_enabled(cfg.audio.enabled);
-                dispatcher.set_volume(cfg.audio.volume);
+                dispatcher.set_enabled(cfg.sound.enabled);
+                dispatcher.set_volume(cfg.sound.volume);
 
                 let current_pack = dispatcher.get_current_pack_name();
-                let target_pack = &cfg.audio.sound_pack;
+                let target_pack = &cfg.sound.sound_pack;
 
                 if current_pack.as_deref() != Some(target_pack.as_str()) {
-                    let path = SoundPackLoader::get_sound_pack_dir().join(target_pack);
-                    if let Err(e) = dispatcher.load_pack(path) {
+                    if let Err(e) = dispatcher.load_pack(target_pack, cfg.sound.folder.as_deref()) {
                         warn!("Failed to load sound pack '{}': {}", target_pack, e);
                     }
                 }
@@ -932,14 +976,27 @@ fn start_keystroke_mode(
             if !cfg.keystroke_draggable {
                 crate::ui::window::update_position(&window_c, cfg.position, cfg.margin);
             }
+
+            visual_c.set(cfg.show_visual);
+            if !cfg.show_visual {
+                window_c.set_visible(false);
+            }
         }
     });
 
     let active = Arc::clone(&mode_active);
     let state_clone = Rc::clone(state);
-    setup_keystroke_cleanup_timer(display.clone(), window.clone(), state_clone, active);
+    setup_keystroke_cleanup_timer(
+        display.clone(),
+        window.clone(),
+        state_clone,
+        active,
+        Rc::clone(&visual_enabled),
+    );
 
-    window.present();
+    if config.show_visual {
+        window.present();
+    }
 
     Ok(())
 }
@@ -959,16 +1016,14 @@ fn start_bubble_mode(
     }
 
     if let Some(dispatcher) = &state.borrow().audio_dispatcher {
-        dispatcher.set_enabled(config.bubble.audio.enabled);
-        dispatcher.set_volume(config.bubble.audio.volume);
+        dispatcher.set_enabled(config.sound.enabled);
+        dispatcher.set_volume(config.sound.volume);
 
         let current_pack = dispatcher.get_current_pack_name();
-        let target_pack = &config.bubble.audio.sound_pack;
+        let target_pack = &config.sound.sound_pack;
 
         if current_pack.as_deref() != Some(target_pack.as_str()) {
-            let path = crate::infrastructure::audio::SoundPackLoader::get_sound_pack_dir()
-                .join(target_pack);
-            if let Err(e) = dispatcher.load_pack(path) {
+            if let Err(e) = dispatcher.load_pack(target_pack, config.sound.folder.as_deref()) {
                 warn!("Failed to load sound pack '{}': {}", target_pack, e);
             }
         }
@@ -991,6 +1046,7 @@ fn start_bubble_mode(
     )));
 
     let mode_active = Arc::new(AtomicBool::new(true));
+    let visual_enabled = Rc::new(Cell::new(config.show_visual));
 
     let display_for_layout = Rc::clone(&display);
     let initial_layout = setup_layout_tracking(state, &config, &mode_active, move |name| {
@@ -1027,6 +1083,7 @@ fn start_bubble_mode(
     {
         let mut s = state.borrow_mut();
         s.mode_active = Some(Arc::clone(&mode_active));
+        s.visual_enabled = Some(Rc::clone(&visual_enabled));
         s.listener_handle = Some(handle);
         s.bubble_window = Some(window.clone());
     }
@@ -1116,6 +1173,7 @@ fn start_bubble_mode(
     let window_c = window.clone();
     let state_c = state.clone();
     let active_c = Arc::clone(&mode_active);
+    let visual_c = Rc::clone(&visual_enabled);
 
     glib::MainContext::default().spawn_local(async move {
         while rx.changed().await.is_ok() {
@@ -1132,15 +1190,14 @@ fn start_bubble_mode(
             );
 
             if let Some(dispatcher) = &state_c.borrow().audio_dispatcher {
-                dispatcher.set_enabled(cfg.bubble.audio.enabled);
-                dispatcher.set_volume(cfg.bubble.audio.volume);
+                dispatcher.set_enabled(cfg.sound.enabled);
+                dispatcher.set_volume(cfg.sound.volume);
 
                 let current_pack = dispatcher.get_current_pack_name();
-                let target_pack = &cfg.bubble.audio.sound_pack;
+                let target_pack = &cfg.sound.sound_pack;
 
                 if current_pack.as_deref() != Some(target_pack.as_str()) {
-                    let path = SoundPackLoader::get_sound_pack_dir().join(target_pack);
-                    if let Err(e) = dispatcher.load_pack(path) {
+                    if let Err(e) = dispatcher.load_pack(target_pack, cfg.sound.folder.as_deref()) {
                         warn!("Failed to load sound pack '{}': {}", target_pack, e);
                     }
                 }
@@ -1181,14 +1238,27 @@ fn start_bubble_mode(
             if !cfg.bubble.draggable {
                 crate::ui::window::update_position(&window_c, cfg.bubble.position, cfg.margin);
             }
+
+            visual_c.set(cfg.show_visual);
+            if !cfg.show_visual {
+                window_c.set_visible(false);
+            }
         }
     });
 
     let active = Arc::clone(&mode_active);
     let state_clone = Rc::clone(state);
-    setup_bubble_cleanup_timer(display.clone(), window.clone(), state_clone, active);
+    setup_bubble_cleanup_timer(
+        display.clone(),
+        window.clone(),
+        state_clone,
+        active,
+        Rc::clone(&visual_enabled),
+    );
 
-    window.present();
+    if config.show_visual {
+        window.present();
+    }
 
     Ok(())
 }
@@ -1198,10 +1268,16 @@ fn setup_keystroke_cleanup_timer(
     window: ApplicationWindow,
     state: Rc<RefCell<RuntimeState>>,
     mode_active: Arc<AtomicBool>,
+    visual_enabled: Rc<Cell<bool>>,
 ) {
     glib::timeout_add_local(Duration::from_millis(100), move || {
         if !mode_active.load(Ordering::SeqCst) {
             return ControlFlow::Break;
+        }
+
+        if !visual_enabled.get() {
+            window.set_visible(false);
+            return ControlFlow::Continue;
         }
 
         if state.borrow().routing_engine.get_states().0 == CaptureState::Paused {
@@ -1234,10 +1310,16 @@ fn setup_bubble_cleanup_timer(
     window: ApplicationWindow,
     state: Rc<RefCell<RuntimeState>>,
     mode_active: Arc<AtomicBool>,
+    visual_enabled: Rc<Cell<bool>>,
 ) {
     glib::timeout_add_local(Duration::from_millis(100), move || {
         if !mode_active.load(Ordering::SeqCst) {
             return ControlFlow::Break;
+        }
+
+        if !visual_enabled.get() {
+            window.set_visible(false);
+            return ControlFlow::Continue;
         }
 
         if state.borrow().routing_engine.get_states().0 == CaptureState::Paused {
@@ -1318,6 +1400,12 @@ mod tests {
         assert_eq!(actions(&["settings"]), vec![AppAction::OpenSettings]);
         assert_eq!(actions(&["launcher"]), vec![AppAction::ShowLauncher]);
         assert_eq!(actions(&["quit"]), vec![AppAction::Quit]);
+    }
+
+    #[test]
+    fn test_cli_sound_and_visual_flags() {
+        assert_eq!(actions(&["sound-toggle"]), vec![AppAction::ToggleSound]);
+        assert_eq!(actions(&["visual-toggle"]), vec![AppAction::ToggleVisual]);
     }
 
     #[test]

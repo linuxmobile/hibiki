@@ -10,6 +10,8 @@ pub enum AppAction {
     KeystrokeMode,
     BubbleMode,
     ToggleMode,
+    ToggleSound,
+    ToggleVisual,
     OpenSettings,
     TogglePause,
     Quit,
@@ -143,6 +145,22 @@ impl Tray for KeystrokeTray {
                 activate: Box::new(|tray: &mut Self| {
                     debug!("Tray: Bubble mode selected");
                     let _ = tray.action_sender.send_blocking(AppAction::BubbleMode);
+                }),
+                ..Default::default()
+            }),
+            MenuItem::Standard(StandardItem {
+                label: "Toggle Sounds".to_string(),
+                activate: Box::new(|tray: &mut Self| {
+                    debug!("Tray: Toggle sounds selected");
+                    let _ = tray.action_sender.send_blocking(AppAction::ToggleSound);
+                }),
+                ..Default::default()
+            }),
+            MenuItem::Standard(StandardItem {
+                label: "Toggle Visualizer".to_string(),
+                activate: Box::new(|tray: &mut Self| {
+                    debug!("Tray: Toggle visualizer selected");
+                    let _ = tray.action_sender.send_blocking(AppAction::ToggleVisual);
                 }),
                 ..Default::default()
             }),

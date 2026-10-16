@@ -1,11 +1,10 @@
 use crate::domain::audio::KeyDefine;
 use crate::infrastructure::audio::{LoadedSoundPack, SoundPackLoader};
 use crate::input::keymap::map_evdev_to_mechvibes;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use parking_lot::RwLock;
 use rodio::cpal::traits::{DeviceTrait, HostTrait};
 use rodio::{OutputStream, OutputStreamBuilder, Source};
-use std::path::PathBuf;
 use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 
@@ -161,13 +160,28 @@ impl AudioEngine {
 }
 
 impl AudioDispatcher {
-    pub fn load_pack(&self, path: PathBuf) -> Result<()> {
-        let pack_name = path.file_name().map(|n| n.to_string_lossy().to_string());
+    pub fn load_pack(&self, id: &str, extra_dir: Option<&str>) -> Result<()> {
+        let pack = match SoundPackLoader::load_pack(id, extra_dir) {
+            Ok(pack) => pack,
+            Err(err) if id != crate::domain::config::DEFAULT_SOUND_PACK => {
+                let fallback = crate::domain::config::DEFAULT_SOUND_PACK;
+                let pack = SoundPackLoader::load_pack(fallback, extra_dir).with_context(|| {
+                    format!("Sound pack '{id}' not found (fallback '{fallback}' also failed)")
+                })?;
+                tracing::warn!(
+                    "Sound pack '{}' could not be loaded ({}); falling back to '{}'",
+                    id,
+                    err,
+                    fallback
+                );
+                pack
+            }
+            Err(err) => return Err(err),
+        };
 
-        let pack = SoundPackLoader::load_from_directory(&path)?;
         let mut state = self.state.write();
         state.pack = Some(pack);
-        state.pack_name = pack_name;
+        state.pack_name = Some(id.to_string());
         Ok(())
     }
 

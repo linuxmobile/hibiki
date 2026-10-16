@@ -136,24 +136,31 @@ impl Validate for SuperKeyIconConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
-pub struct AudioConfig {
+pub struct SoundConfig {
     pub enabled: bool,
     pub volume: f32,
     pub sound_pack: String,
+    pub folder: Option<String>,
 }
 
-impl Validate for AudioConfig {
+pub const DEFAULT_SOUND_PACK: &str = "cherrymx-blue-abs";
+
+impl Validate for SoundConfig {
     fn validate(&mut self) {
         self.volume = self.volume.clamp(0.0, 1.0);
+        if self.folder.as_deref().is_some_and(str::is_empty) {
+            self.folder = None;
+        }
     }
 }
 
-impl Default for AudioConfig {
+impl Default for SoundConfig {
     fn default() -> Self {
         Self {
             enabled: false,
             volume: 1.0,
-            sound_pack: "cherrymx-blue-abs".to_string(),
+            sound_pack: DEFAULT_SOUND_PACK.to_string(),
+            folder: None,
         }
     }
 }
@@ -170,7 +177,6 @@ pub struct BubbleConfig {
     /// Optional custom bubble text color (e.g. `#cdd6f4`).
     /// When `None`, the theme foreground is used.
     pub foreground: Option<String>,
-    pub audio: AudioConfig,
     pub position: Position,
     pub draggable: bool,
     pub hotkey: String,
@@ -186,8 +192,6 @@ impl Validate for BubbleConfig {
         self.timeout_ms = self.timeout_ms.clamp(100, 30000);
         self.opacity = self.opacity.clamp(0.0, 1.0);
         self.corner_radius = self.corner_radius.clamp(0.0, 1.0);
-
-        self.audio.validate();
     }
 }
 
@@ -199,7 +203,6 @@ impl Default for BubbleConfig {
             color: "#3584e4".to_string(),
             background: None,
             foreground: None,
-            audio: AudioConfig::default(),
             position: Position::TopRight,
             draggable: false,
             hotkey: "<Shift><Control>b".to_string(),
@@ -284,7 +287,9 @@ pub struct KeystrokeConfig {
 
     pub bubble: BubbleConfig,
 
-    pub audio: AudioConfig,
+    pub sound: SoundConfig,
+
+    pub show_visual: bool,
 
     pub corner_radius: f64,
 }
@@ -308,7 +313,7 @@ impl Validate for KeystrokeConfig {
         self.corner_radius = self.corner_radius.clamp(0.0, 1.0);
 
         self.bubble.validate();
-        self.audio.validate();
+        self.sound.validate();
         self.super_key_icon.validate();
     }
 }
@@ -342,7 +347,8 @@ impl Default for KeystrokeConfig {
             keyboard_layout: None,
             super_key_icon: SuperKeyIconConfig::default(),
             bubble: BubbleConfig::default(),
-            audio: AudioConfig::default(),
+            sound: SoundConfig::default(),
+            show_visual: true,
             corner_radius: 1.0,
         }
     }
@@ -353,11 +359,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_audio_config_validation() {
-        let mut config = AudioConfig {
+    fn test_sound_config_validation() {
+        let mut config = SoundConfig {
             enabled: true,
             volume: 1.5,
             sound_pack: "test".to_string(),
+            folder: None,
         };
         config.validate();
         assert_eq!(config.volume, 1.0);
@@ -365,6 +372,14 @@ mod tests {
         config.volume = -0.5;
         config.validate();
         assert_eq!(config.volume, 0.0);
+    }
+
+    #[test]
+    fn test_sound_defaults_and_visual_enabled() {
+        let config = KeystrokeConfig::default();
+        assert!(!config.sound.enabled);
+        assert_eq!(config.sound.sound_pack, "cherrymx-blue-abs");
+        assert!(config.show_visual);
     }
 
     #[test]

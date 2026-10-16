@@ -17,6 +17,9 @@ And yes, it's written in Rust, so you already know it's blazing fast and memory-
   - Built-in `rodio`-based audio engine on a dedicated thread.
   - Compatible with **Mechvibes** sound packs (single and multi-file support).
   - Zero-copy sample playback for low latency.
+  - **Switch Sounds** are a standalone feature: enable them alongside Keystroke
+    or Bubble mode, or turn off the visualizer to *only* hear the keystrokes.
+    Configured once under **Settings → Switch Sounds**.
 - **Modern Configuration**:
   - Configuration migrated to `config.toml` (auto-migrates from old JSON).
   - **Granular Typography**: Customize font family, weight, and size per mode.
@@ -119,6 +122,43 @@ ignored and the built-in logo is used instead. Everything is configurable from
 **Settings → Keystrokes → Super Key Icon**, which offers a searchable icon
 picker with a live preview.
 
+### Switch sounds
+
+Key switch sounds are configured once and shared by every mode. They used to
+live under `[audio]` / `[bubble.audio]`; existing configs are migrated
+automatically on load.
+
+```toml
+[sound]
+enabled = true                  # play switch sounds on every keypress
+volume = 0.8                    # 0.0 – 1.0
+sound_pack = "cherrymx-blue-abs"
+
+# Extra folder to scan for your own packs (optional).
+# folder = "/home/you/Downloads/mechvibes-packs"
+
+# Draw the keystroke/bubble overlay. Set to false for sound only.
+show_visual = true
+```
+
+Some switch sounds are **built into the binary**, so they are available no
+matter how Hibiki was installed (`cargo install`, Nix, or a plain binary):
+
+- CherryMX Blue (ABS) — `cherrymx-blue-abs`
+- CherryMX Brown (ABS) — `cherrymx-brown-abs`
+- CherryMX Red (ABS) — `cherrymx-red-abs`
+- EG Oreo — `eg-oreo`
+- NK Cream — `nk-cream`
+
+To add more, drop Mechvibes-format pack folders into
+`~/.local/share/hibiki/sounds`, or use **Switch Sounds → Choose folder…** to
+load packs from any other directory. A pack is a folder containing a
+`config.json` plus its audio files (`wav`/`ogg`); the info button in that tab
+has the details. Packs found in a folder override built-ins with the same name.
+
+Flip sound and visual on/off at runtime with `hibiki --sound-toggle` and
+`hibiki --visual-toggle`, or from the **Settings → Switch Sounds** tab.
+
 ## Control from the compositor (CLI)
 
 Hibiki ships a small CLI that talks to the running instance, so modes can be
@@ -129,6 +169,8 @@ hibiki --keystroke-toggle   # switch to keystroke mode (alias: --keystroke, -k)
 hibiki --bubble-toggle      # switch to bubble mode    (alias: --bubble, -b)
 hibiki --toggle             # toggle between the two modes (-t)
 hibiki --pause-toggle       # pause/resume capture      (-p)
+hibiki --sound-toggle       # enable/disable switch sounds
+hibiki --visual-toggle      # show/hide the visualizer (sound only)
 hibiki --settings           # open settings
 hibiki --launcher           # bring the launcher back up
 hibiki --quit               # quit the running instance

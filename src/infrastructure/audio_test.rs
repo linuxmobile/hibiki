@@ -104,4 +104,31 @@ mod tests {
         assert!((collected[2] - 1.0).abs() < 0.001);
         assert!((collected[3] + 0.5).abs() < 0.001);
     }
+
+    #[test]
+    fn test_list_includes_builtin_packs() {
+        let packs = SoundPackLoader::list_available_packs(None);
+        let ids: Vec<&str> = packs.iter().map(|(id, _)| id.as_str()).collect();
+        assert!(ids.contains(&"cherrymx-blue-abs"));
+        assert!(ids.contains(&"eg-oreo"));
+        assert!(ids.contains(&"nk-cream"));
+    }
+
+    #[test]
+    fn test_load_builtin_single_pack_from_embedded() {
+        let pack = SoundPackLoader::load_pack("cherrymx-blue-abs", None)
+            .expect("built-in pack should load from the binary");
+        let buffer = pack
+            .buffers
+            .get("main")
+            .expect("single pack has a main buffer");
+        assert!(buffer.samples.len() > 1000);
+    }
+
+    #[test]
+    fn test_load_builtin_multi_pack_from_embedded() {
+        let pack =
+            SoundPackLoader::load_pack("nk-cream", None).expect("built-in multi pack should load");
+        assert!(!pack.buffers.is_empty());
+    }
 }

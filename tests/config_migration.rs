@@ -57,3 +57,67 @@ fn test_toml_priority() {
         "config.json should still exist if config.toml was already present"
     );
 }
+
+#[test]
+fn test_legacy_keystroke_audio_migrates_to_sound() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let toml_path = temp_dir.path().join("config.toml");
+
+    let legacy = r#"
+[audio]
+enabled = true
+volume = 0.5
+sound_pack = "legacy-pack"
+"#;
+    fs::write(&toml_path, legacy).unwrap();
+
+    let repo = SettingsRepository::with_dir(temp_dir.path().to_path_buf());
+    let config = repo.load().expect("Failed to load config");
+
+    assert!(config.sound.enabled);
+    assert_eq!(config.sound.volume, 0.5);
+    assert_eq!(config.sound.sound_pack, "legacy-pack");
+}
+
+#[test]
+fn test_legacy_bubble_audio_migrates_to_sound() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let toml_path = temp_dir.path().join("config.toml");
+
+    let legacy = r#"
+[bubble.audio]
+enabled = true
+volume = 0.25
+sound_pack = "bubble-pack"
+"#;
+    fs::write(&toml_path, legacy).unwrap();
+
+    let repo = SettingsRepository::with_dir(temp_dir.path().to_path_buf());
+    let config = repo.load().expect("Failed to load config");
+
+    assert!(config.sound.enabled);
+    assert_eq!(config.sound.volume, 0.25);
+    assert_eq!(config.sound.sound_pack, "bubble-pack");
+}
+
+#[test]
+fn test_new_sound_section_wins_over_legacy_audio() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let toml_path = temp_dir.path().join("config.toml");
+
+    let content = r#"
+[audio]
+enabled = true
+sound_pack = "old-pack"
+
+[sound]
+enabled = true
+sound_pack = "new-pack"
+"#;
+    fs::write(&toml_path, content).unwrap();
+
+    let repo = SettingsRepository::with_dir(temp_dir.path().to_path_buf());
+    let config = repo.load().expect("Failed to load config");
+
+    assert_eq!(config.sound.sound_pack, "new-pack");
+}

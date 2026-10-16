@@ -124,7 +124,7 @@ fn create_launcher_content(
     container.append(&title);
 
     let subtitle = Label::new(Some(
-        "Visualize your keystrokes and shortcuts in real-time.",
+        "Visualize your keystrokes and shortcuts — or just hear them.",
     ));
     subtitle.add_css_class("header-subtitle");
     container.append(&subtitle);

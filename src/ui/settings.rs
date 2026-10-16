@@ -1,6 +1,6 @@
 use crate::application::config_service::ConfigService;
 use crate::application::typography_service::TypographyService;
-use crate::domain::config::{AudioConfig, KeystrokeConfig, Position, SuperKeyIconMode};
+use crate::domain::config::{KeystrokeConfig, Position, SuperKeyIconMode};
 use crate::infrastructure::audio::SoundPackLoader;
 use gtk4::prelude::*;
 use gtk4::{
@@ -65,6 +65,16 @@ pub fn create_settings_window(
     let bubble_content = create_bubble_settings(&config_service, &typography_service, &window);
     bubble_scroll.set_child(Some(&bubble_content));
     stack.add_titled(&bubble_scroll, Some("bubble"), "Bubbles");
+
+    let sound_scroll = ScrolledWindow::builder()
+        .hscrollbar_policy(gtk4::PolicyType::Never)
+        .vscrollbar_policy(gtk4::PolicyType::Automatic)
+        .vexpand(true)
+        .hexpand(true)
+        .build();
+    let sound_content = create_sound_settings(&config_service, &window);
+    sound_scroll.set_child(Some(&sound_content));
+    stack.add_titled(&sound_scroll, Some("sound"), "Switch Sounds");
 
     main_box.append(&stack);
     window.set_child(Some(&main_box));
@@ -1464,13 +1474,6 @@ fn create_keystroke_settings(
 
     setup_hotkey_capture(window, &hk2_btn, config_service.clone(), HotkeyType::Pause);
 
-    let service_c = config_service.clone();
-    create_audio_group(&content_box, config.audio.clone(), move |modifier| {
-        let mut cfg = service_c.get_config();
-        modifier(&mut cfg.audio);
-        let _ = service_c.update_config(cfg);
-    });
-
     content_box
 }
 
@@ -1764,13 +1767,6 @@ fn create_bubble_settings(
         HotkeyType::ToggleFocus,
     );
 
-    let service_c = config_service.clone();
-    create_audio_group(&content_box, config.bubble.audio.clone(), move |modifier| {
-        let mut cfg = service_c.get_config();
-        modifier(&mut cfg.bubble.audio);
-        let _ = service_c.update_config(cfg);
-    });
-
     content_box
 }
 
@@ -1839,47 +1835,143 @@ fn setup_hotkey_capture(
     });
 }
 
-fn create_audio_group<F>(parent: &GtkBox, config: AudioConfig, update_fn: F)
-where
-    F: Fn(Box<dyn Fn(&mut AudioConfig)>) + 'static + Clone,
-{
+fn reload_pack_list(
+    string_list: &StringList,
+    display_names: &Rc<RefCell<HashMap<String, String>>>,
+    selection_model: &SingleSelection,
+    pack_list: &ListView,
+    selected_pack: &str,
+    extra_dir: Option<&str>,
+) {
+    let packs = SoundPackLoader::list_available_packs(extra_dir);
+
+    {
+        let mut map = display_names.borrow_mut();
+        map.clear();
+        for (id, name) in &packs {
+            map.insert(id.clone(), name.clone());
+        }
+    }
+
+    let ids: Vec<&str> = packs.iter().map(|(id, _)| id.as_str()).collect();
+    string_list.splice(0, string_list.n_items(), &ids);
+
+    if let Some(idx) = packs.iter().position(|(id, _)| id == selected_pack) {
+        selection_model.set_selected(idx as u32);
+        let pack_list = pack_list.clone();
+        glib::timeout_add_local_once(std::time::Duration::from_millis(50), move || {
+            pack_list.scroll_to(
+                idx as u32,
+                ListScrollFlags::FOCUS | ListScrollFlags::SELECT,
+                None,
+            );
+        });
+    }
+}
+
+fn create_sound_settings(config_service: &ConfigService, window: &ApplicationWindow) -> GtkBox {
+    SoundPackLoader::ensure_user_sounds_dir();
+
+    let content_box = GtkBox::new(Orientation::Vertical, 0);
+    content_box.set_margin_start(32);
+    content_box.set_margin_end(32);
+    content_box.set_valign(Align::Start);
+    content_box.set_halign(Align::Fill);
+
+    let header_box = GtkBox::new(Orientation::Horizontal, 12);
+    header_box.set_margin_top(16);
+    header_box.set_margin_bottom(16);
+    let header = Label::builder()
+        .label("Switch Sounds")
+        .css_classes(vec!["title-2"])
+        .build();
+    header_box.append(&header);
+    content_box.append(&header_box);
+
+    let config = config_service.get_config();
+
+    let general_card = GtkBox::new(Orientation::Vertical, 0);
+    general_card.add_css_class("settings-card");
+    general_card.set_margin_bottom(24);
+    general_card.set_spacing(20);
+
+    let enable_box = GtkBox::new(Orientation::Horizontal, 12);
+    let enable_text = GtkBox::new(Orientation::Vertical, 2);
+    enable_text.set_hexpand(true);
+    let enable_lbl = Label::builder()
+        .label("Enable Sounds")
+        .xalign(0.0)
+        .css_classes(vec!["body"])
+        .build();
+    let enable_sub = Label::builder()
+        .label("Play switch sounds for every key press.")
+        .xalign(0.0)
+        .css_classes(vec!["caption", "dim-label"])
+        .build();
+    enable_text.append(&enable_lbl);
+    enable_text.append(&enable_sub);
+    enable_box.append(&enable_text);
+
+    let enabled_switch = Switch::builder()
+        .active(config.sound.enabled)
+        .valign(Align::Center)
+        .build();
+    enable_box.append(&enabled_switch);
+    general_card.append(&enable_box);
+
+    let visual_box = GtkBox::new(Orientation::Horizontal, 12);
+    let visual_text = GtkBox::new(Orientation::Vertical, 2);
+    visual_text.set_hexpand(true);
+    let visual_lbl = Label::builder()
+        .label("Show Visualizer")
+        .xalign(0.0)
+        .css_classes(vec!["body"])
+        .build();
+    let visual_sub = Label::builder()
+        .label("Draw keystrokes or bubbles on screen. Turn off to only hear sounds.")
+        .xalign(0.0)
+        .css_classes(vec!["caption", "dim-label"])
+        .build();
+    visual_text.append(&visual_lbl);
+    visual_text.append(&visual_sub);
+    visual_box.append(&visual_text);
+
+    let visual_switch = Switch::builder()
+        .active(config.show_visual)
+        .valign(Align::Center)
+        .build();
+    visual_box.append(&visual_switch);
+    general_card.append(&visual_box);
+
+    visual_switch.set_sensitive(config.sound.enabled);
+
+    content_box.append(&general_card);
+
+    let visual_switch_c = visual_switch.clone();
+    let service_c = config_service.clone();
+    enabled_switch.connect_state_set(move |_, state| {
+        let mut cfg = service_c.get_config();
+        if cfg.sound.enabled != state {
+            cfg.sound.enabled = state;
+            let _ = service_c.update_config(cfg);
+        }
+        visual_switch_c.set_sensitive(state);
+        glib::Propagation::Proceed
+    });
+
+    let service_c = config_service.clone();
+    visual_switch.connect_state_set(move |_, state| {
+        let mut cfg = service_c.get_config();
+        if cfg.show_visual != state {
+            cfg.show_visual = state;
+            let _ = service_c.update_config(cfg);
+        }
+        glib::Propagation::Proceed
+    });
+
     let section_card = GtkBox::new(Orientation::Vertical, 0);
     section_card.add_css_class("settings-card");
     section_card.set_margin_bottom(24);
-
-    let audio_label = Label::builder()
-        .label("Key Switches")
-        .css_classes(vec!["title-2"])
-        .halign(Align::Start)
-        .margin_top(24)
-        .margin_bottom(16)
-        .build();
-    parent.append(&audio_label);
-
-    let enable_box = GtkBox::new(Orientation::Horizontal, 12);
-    enable_box.set_margin_bottom(24);
-
-    let enable_lbl = Label::builder()
-        .label("Enable Sounds")
-        .hexpand(true)
-        .xalign(0.0)
-        .css_classes(vec!["title-4"])
-        .build();
-
-    let enabled_switch = Switch::builder()
-        .active(config.enabled)
-        .valign(Align::Center)
-        .build();
-
-    enable_box.append(&enable_lbl);
-    enable_box.append(&enabled_switch);
-    section_card.append(&enable_box);
-
-    let update_c = update_fn.clone();
-    enabled_switch.connect_state_set(move |_, state| {
-        update_c(Box::new(move |cfg| cfg.enabled = state));
-        glib::Propagation::Proceed
-    });
 
     let grid = Grid::builder()
         .column_spacing(24)
@@ -1896,6 +1988,34 @@ where
         .halign(Align::Start)
         .build();
     left_col.append(&pack_label);
+
+    let folder_row = GtkBox::new(Orientation::Horizontal, 8);
+    let folder_value = Label::builder()
+        .label(
+            config
+                .sound
+                .folder
+                .clone()
+                .unwrap_or_else(|| "No extra folder".to_string()),
+        )
+        .css_classes(vec!["caption", "dim-label"])
+        .ellipsize(gtk4::pango::EllipsizeMode::Middle)
+        .hexpand(true)
+        .xalign(0.0)
+        .build();
+    let folder_btn = Button::builder()
+        .label("Choose folder…")
+        .valign(Align::Center)
+        .build();
+    let info_btn = Button::builder()
+        .icon_name("dialog-information-symbolic")
+        .tooltip_text("How to add your own sound packs")
+        .valign(Align::Center)
+        .build();
+    folder_row.append(&folder_value);
+    folder_row.append(&folder_btn);
+    folder_row.append(&info_btn);
+    left_col.append(&folder_row);
 
     let search_entry = SearchEntry::builder()
         .placeholder_text("Find switch sound...")
@@ -1973,12 +2093,6 @@ where
     pack_list.set_model(Some(&selection_model));
     pack_list.set_factory(Some(&factory));
 
-    let current_pack = config.sound_pack.clone();
-    let list_c = string_list.clone();
-    let selection_c = selection_model.clone();
-    let pack_list_weak = pack_list.downgrade();
-    let display_names_c = display_names.clone();
-
     pack_list.connect_map(move |pack_list| {
         if let Some(model) = pack_list.model() {
             if let Some(selection_model) = model.downcast_ref::<SingleSelection>() {
@@ -2008,35 +2122,73 @@ where
         }
     });
 
-    let packs_future = async move { SoundPackLoader::list_available_packs() };
+    reload_pack_list(
+        &string_list,
+        &display_names,
+        &selection_model,
+        &pack_list,
+        &config.sound.sound_pack,
+        config.sound.folder.as_deref(),
+    );
 
-    glib::MainContext::default().spawn_local(async move {
-        let packs = packs_future.await;
+    let window_c = window.clone();
+    let service_c = config_service.clone();
+    let string_list_c = string_list.clone();
+    let display_names_c = display_names.clone();
+    let selection_c = selection_model.clone();
+    let pack_list_c = pack_list.clone();
+    let folder_value_c = folder_value.clone();
+    folder_btn.connect_clicked(move |_| {
+        let dialog = FileDialog::builder()
+            .title("Choose sounds folder")
+            .modal(true)
+            .build();
+        let window_c = window_c.clone();
+        let service_c = service_c.clone();
+        let string_list_c = string_list_c.clone();
+        let display_names_c = display_names_c.clone();
+        let selection_c = selection_c.clone();
+        let pack_list_c = pack_list_c.clone();
+        let folder_value_c = folder_value_c.clone();
+        glib::MainContext::default().spawn_local(async move {
+            if let Ok(folder) = dialog.select_folder_future(Some(&window_c)).await {
+                let Some(path) = folder.path() else {
+                    return;
+                };
+                let path_str = path.to_string_lossy().to_string();
 
-        {
-            let mut map = display_names_c.borrow_mut();
-            for (id, name) in &packs {
-                map.insert(id.clone(), name.clone());
+                let mut cfg = service_c.get_config();
+                cfg.sound.folder = Some(path_str.clone());
+                let pack = cfg.sound.sound_pack.clone();
+                let _ = service_c.update_config(cfg);
+
+                folder_value_c.set_label(&path_str);
+                reload_pack_list(
+                    &string_list_c,
+                    &display_names_c,
+                    &selection_c,
+                    &pack_list_c,
+                    &pack,
+                    Some(path_str.as_str()),
+                );
             }
-        }
+        });
+    });
 
-        let ids: Vec<&str> = packs.iter().map(|(id, _)| id.as_str()).collect();
-        list_c.splice(0, 0, &ids);
-
-        if let Some(idx) = packs.iter().position(|(id, _)| *id == current_pack) {
-            selection_c.set_selected(idx as u32);
-
-            let pack_list_weak = pack_list_weak.clone();
-            glib::timeout_add_local_once(std::time::Duration::from_millis(50), move || {
-                if let Some(pack_list) = pack_list_weak.upgrade() {
-                    pack_list.scroll_to(
-                        idx as u32,
-                        ListScrollFlags::FOCUS | ListScrollFlags::SELECT,
-                        None,
-                    );
-                }
-            });
-        }
+    let window_c = window.clone();
+    info_btn.connect_clicked(move |_| {
+        let dialog = gtk4::AlertDialog::builder()
+            .modal(true)
+            .message("Adding your own switch sounds")
+            .detail(
+                "A sound pack is a folder containing a config.json (Mechvibes format) plus its \
+                 audio files (WAV or OGG).\n\nSingle packs reference one file in \"sound\"; \
+                 multi packs reference one file per key in \"defines\".\n\nPacks placed in \
+                 ~/.local/share/hibiki/sounds are always loaded. Choose any folder here to load \
+                 packs from it as well.",
+            )
+            .build();
+        dialog.show(Some(&window_c));
     });
 
     let filter_c = filter.clone();
@@ -2051,16 +2203,19 @@ where
         });
     });
 
-    let update_c = update_fn.clone();
+    let service_c = config_service.clone();
     selection_model.connect_selected_item_notify(move |model| {
         if let Some(item) = model.selected_item() {
             let string_obj = item
                 .downcast::<gtk4::StringObject>()
                 .expect("item must be a gtk4::StringObject");
-            let id = string_obj.string();
-            let id_clone = id.clone();
+            let id = string_obj.string().to_string();
 
-            update_c(Box::new(move |cfg| cfg.sound_pack = id_clone.to_string()));
+            let mut cfg = service_c.get_config();
+            if cfg.sound.sound_pack != id {
+                cfg.sound.sound_pack = id;
+                let _ = service_c.update_config(cfg);
+            }
         }
     });
 
@@ -2084,7 +2239,7 @@ where
         .build();
 
     let vol_val_label = Label::builder()
-        .label(format!("{:.0}%", config.volume * 100.0))
+        .label(format!("{:.0}%", config.sound.volume * 100.0))
         .css_classes(vec!["badge"])
         .build();
 
@@ -2096,7 +2251,14 @@ where
     let vol_icon_low = gtk4::Image::from_icon_name("audio-volume-low-symbolic");
     let vol_icon_high = gtk4::Image::from_icon_name("audio-volume-high-symbolic");
 
-    let vol_adj = Adjustment::new(config.volume as f64 * 100.0, 0.0, 100.0, 1.0, 10.0, 0.0);
+    let vol_adj = Adjustment::new(
+        config.sound.volume as f64 * 100.0,
+        0.0,
+        100.0,
+        1.0,
+        10.0,
+        0.0,
+    );
     let vol_scale = Scale::builder()
         .orientation(Orientation::Horizontal)
         .adjustment(&vol_adj)
@@ -2109,19 +2271,26 @@ where
     vol_slider_box.append(&vol_icon_high);
     vol_card.append(&vol_slider_box);
 
-    let update_c = update_fn.clone();
+    let service_c = config_service.clone();
     let vol_val_c = vol_val_label.clone();
     vol_adj.connect_value_changed(move |adj| {
         let val = adj.value();
         vol_val_c.set_label(&format!("{:.0}%", val));
-        update_c(Box::new(move |cfg| cfg.volume = (val / 100.0) as f32));
+        let volume = (val / 100.0) as f32;
+        let mut cfg = service_c.get_config();
+        if (cfg.sound.volume - volume).abs() > f32::EPSILON {
+            cfg.sound.volume = volume;
+            let _ = service_c.update_config(cfg);
+        }
     });
 
     right_col.append(&vol_card);
     grid.attach(&right_col, 1, 0, 1, 1);
 
     section_card.append(&grid);
-    parent.append(&section_card);
+    content_box.append(&section_card);
+
+    content_box
 }
 
 fn format_hotkey(accelerator: &str) -> String {

@@ -1,4 +1,4 @@
-use crate::domain::config::{KeystrokeConfig, Validate};
+use crate::domain::config::{KeystrokeConfig, SoundConfig, Validate};
 use anyhow::{Context, Result};
 use std::fs;
 use std::io::Write;
@@ -8,6 +8,31 @@ use tracing::{debug, info, warn};
 
 pub struct SettingsRepository {
     config_dir: PathBuf,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default)]
+struct LegacySoundLayout {
+    sound: Option<SoundConfig>,
+    audio: Option<SoundConfig>,
+    bubble: LegacyBubbleSound,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default)]
+struct LegacyBubbleSound {
+    audio: Option<SoundConfig>,
+}
+
+impl LegacySoundLayout {
+    fn migrate_into(&self, config: &mut KeystrokeConfig) {
+        if self.sound.is_some() {
+            return;
+        }
+        if let Some(legacy) = self.audio.as_ref().or(self.bubble.audio.as_ref()) {
+            config.sound = legacy.clone();
+        }
+    }
 }
 
 impl SettingsRepository {
@@ -31,6 +56,9 @@ impl SettingsRepository {
                 .with_context(|| format!("Failed to read config: {:?}", toml_path))?;
             let mut config: KeystrokeConfig =
                 toml::from_str(&content).with_context(|| "Failed to parse TOML config file")?;
+            if let Ok(legacy) = toml::from_str::<LegacySoundLayout>(&content) {
+                legacy.migrate_into(&mut config);
+            }
             config.validate();
             info!("Loaded configuration from {:?}", toml_path);
             Ok(config)
@@ -43,6 +71,9 @@ impl SettingsRepository {
                 .with_context(|| format!("Failed to read legacy config: {:?}", json_path))?;
             let mut config: KeystrokeConfig = serde_json::from_str(&content)
                 .with_context(|| "Failed to parse legacy JSON config")?;
+            if let Ok(legacy) = serde_json::from_str::<LegacySoundLayout>(&content) {
+                legacy.migrate_into(&mut config);
+            }
             config.validate();
 
             self.save(&config)?;
