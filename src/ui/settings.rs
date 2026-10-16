@@ -1373,7 +1373,7 @@ fn create_keystroke_settings(
         let _ = backend_service.update_config(cfg);
     });
 
-    card_content.append(&backend_box);
+    b_left.append(&backend_box);
 
     b_right.append(&card_content);
 

@@ -277,8 +277,7 @@ impl XkbState {
     }
 
     pub fn key_get_utf8(&self, key: Key) -> Option<String> {
-        let keycode = Self::key_to_keycode(key);
-        let utf8 = self.state.key_get_utf8(keycode);
+        let utf8 = xkb::keysym_to_utf8(self.key_get_one_sym(key));
 
         if utf8.is_empty() {
             None
@@ -287,7 +286,6 @@ impl XkbState {
         }
     }
 
-    #[allow(dead_code)]
     pub fn key_get_one_sym(&self, key: Key) -> xkb::Keysym {
         let keycode = Self::key_to_keycode(key);
         self.state.key_get_one_sym(keycode)
@@ -439,6 +437,17 @@ mod tests {
 
         let result = state.key_get_utf8(Key::KEY_Z);
         assert_eq!(result, Some("y".to_string()));
+    }
+
+    #[test]
+    fn test_xkb_ctrl_does_not_uppercase_letter() {
+        let mut state = XkbState::from_layout_name(Some("English (US)")).unwrap();
+
+        assert_eq!(state.key_get_utf8(Key::KEY_C), Some("c".to_string()));
+
+        state.update_key(Key::KEY_LEFTCTRL, true);
+
+        assert_eq!(state.key_get_utf8(Key::KEY_C), Some("c".to_string()));
     }
 
     #[test]

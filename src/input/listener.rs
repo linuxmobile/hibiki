@@ -44,6 +44,7 @@ impl Default for ListenerConfig {
 pub struct ListenerHandle {
     running: Arc<AtomicBool>,
     control_txs: Vec<Sender<InputControlCommand>>,
+    threads: Vec<thread::JoinHandle<()>>,
 }
 
 impl ListenerHandle {
@@ -59,6 +60,9 @@ impl ListenerHandle {
 impl Drop for ListenerHandle {
     fn drop(&mut self) {
         self.running.store(false, Ordering::SeqCst);
+        for thread in self.threads.drain(..) {
+            let _ = thread.join();
+        }
     }
 }
 
@@ -100,6 +104,7 @@ impl KeyListener {
         self.running.store(true, Ordering::SeqCst);
 
         let mut control_txs = Vec::new();
+        let mut threads = Vec::new();
 
         for keyboard in devices_to_use {
             let sender = self.sender.clone();
@@ -110,7 +115,7 @@ impl KeyListener {
             let (control_tx, control_rx) = async_channel::unbounded::<InputControlCommand>();
             control_txs.push(control_tx);
 
-            thread::spawn(move || {
+            let handle = thread::spawn(move || {
                 if let Err(e) = listen_to_device(
                     keyboard,
                     sender,
@@ -122,11 +127,13 @@ impl KeyListener {
                     error!("Keyboard listener error: {}", e);
                 }
             });
+            threads.push(handle);
         }
 
         Ok(ListenerHandle {
             running: self.running.clone(),
             control_txs,
+            threads,
         })
     }
 }
@@ -174,7 +181,15 @@ fn listen_to_device(
                                     pending_grab = false;
                                 }
                                 Err(e) => {
-                                    error!("Failed to grab keyboard {}: {}", keyboard.name, e)
+                                    if e.raw_os_error() == Some(nix::libc::EBUSY) {
+                                        warn!(
+                                            "Keyboard {} busy; will retry the grab",
+                                            keyboard.name
+                                        );
+                                        pending_grab = true;
+                                    } else {
+                                        error!("Failed to grab keyboard {}: {}", keyboard.name, e);
+                                    }
                                 }
                             }
                         } else {
@@ -228,11 +243,15 @@ fn listen_to_device(
                             pending_grab = false;
                         }
                         Err(e) => {
-                            error!(
-                                "Failed to execute pending grab for {}: {}",
-                                keyboard.name, e
-                            );
-                            pending_grab = false;
+                            if e.raw_os_error() == Some(nix::libc::EBUSY) {
+                                warn!("Keyboard {} still busy; will retry the grab", keyboard.name);
+                            } else {
+                                error!(
+                                    "Failed to execute pending grab for {}: {}",
+                                    keyboard.name, e
+                                );
+                                pending_grab = false;
+                            }
                         }
                     }
                 }
@@ -340,6 +359,7 @@ mod tests {
         let handle = ListenerHandle {
             running: running.clone(),
             control_txs: vec![control_tx],
+            threads: Vec::new(),
         };
 
         assert!(running.load(Ordering::SeqCst));

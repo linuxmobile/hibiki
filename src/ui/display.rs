@@ -63,6 +63,10 @@ fn is_word_break_key(key: Key) -> bool {
     )
 }
 
+fn is_word_separator(key: Key) -> bool {
+    matches!(key, Key::KEY_SPACE | Key::KEY_TAB)
+}
+
 pub fn hibiki_logo_texture(size: i32) -> Option<Texture> {
     let (bg_color, fg_color) = {
         let dummy = gtk4::Label::new(None);
@@ -301,11 +305,11 @@ impl KeyDisplayWidget {
         }
 
         if key.is_repeat {
-            if self.unify_words && is_word_break_key(key.key) {
+            if self.unify_words && is_word_separator(key.key) {
                 self.unify_word_break();
-            } else {
-                self.refresh_repeat(key.key);
+                return;
             }
+            self.refresh_repeat(key.key);
             return;
         }
 
@@ -381,7 +385,8 @@ impl KeyDisplayWidget {
             return false;
         }
         if is_word_break_key(key) {
-            return self.unify_word_break();
+            self.unify_word_break();
+            return is_word_separator(key);
         }
 
         let Some(ch) = unified_char(key, &self.xkb_state) else {
@@ -425,7 +430,7 @@ impl KeyDisplayWidget {
         }
     }
 
-    /// Consumed even when repeating, so the separator never renders as a key.
+    /// Closes the current word so the next character starts a fresh bubble.
     fn unify_word_break(&mut self) -> bool {
         let has_word = self
             .displayed_keys
@@ -875,6 +880,13 @@ mod tests {
         assert_eq!(key_label_from_layout(Key::KEY_2, &state), "@");
     }
 
+    #[test]
+    fn test_key_label_ctrl_stays_lowercase() {
+        let mut state = XkbState::from_layout_name(Some("English (US)")).unwrap();
+        state.update_key(Key::KEY_LEFTCTRL, true);
+        assert_eq!(key_label_from_layout(Key::KEY_C, &state), "c");
+    }
+
     fn modifiers(keys: &[Key]) -> HashSet<Key> {
         keys.iter().copied().collect()
     }
@@ -1034,6 +1046,16 @@ mod tests {
         assert!(!is_word_break_key(Key::KEY_A));
         assert!(!is_word_break_key(Key::KEY_BACKSPACE));
         assert!(!is_word_break_key(Key::KEY_LEFTCTRL));
+    }
+
+    #[test]
+    fn only_space_and_tab_are_consumed_separators() {
+        assert!(is_word_separator(Key::KEY_SPACE));
+        assert!(is_word_separator(Key::KEY_TAB));
+
+        assert!(!is_word_separator(Key::KEY_ENTER));
+        assert!(!is_word_separator(Key::KEY_KPENTER));
+        assert!(!is_word_separator(Key::KEY_A));
     }
 
     #[test]
