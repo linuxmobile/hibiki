@@ -32,7 +32,7 @@ source_aarch64=("hibiki-linux-aarch64::$url/releases/download/v$pkgver/hibiki-li
 sha256sums=(
   'da01c0746c15fd2e6a322ee3cc0eb302a0b01dbc770e0c712b864d5075327223'
   '1d0fa6f8edeb97da66fe2763b49d4c41409316294f484f9e75047dd65346fff2'
-  '4449b86cb325f75d0cec4250596872fa4102bb8734406d6266c2173548f659e6'
+  '03442ace9a725cfc3101af42d1ce8d43539e685a98a11fa989e76d2709521ebb'
 )
 sha256sums_x86_64=('SKIP')
 sha256sums_aarch64=('SKIP')
