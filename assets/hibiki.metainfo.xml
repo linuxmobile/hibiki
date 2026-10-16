@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>hibiki</id>
+  <id>io.github.linuxmobile.hibiki</id>
 
   <name>Hibiki</name>
   <summary>A high-fidelity keystroke and bubble visualizer for Wayland</summary>
