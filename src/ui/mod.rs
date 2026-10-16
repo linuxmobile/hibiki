@@ -6,7 +6,7 @@ pub mod launcher;
 pub mod settings;
 pub mod window;
 
-pub use bubble::BubbleDisplayWidget;
+pub use bubble::{alignment_for, BubbleDisplayWidget};
 pub use display::{hibiki_logo_texture, KeyDisplayWidget};
 pub use drag::setup_drag;
 pub use icon_renderer::{render_tray_icon, IconTheme};

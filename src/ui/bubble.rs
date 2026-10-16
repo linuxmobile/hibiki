@@ -1,3 +1,4 @@
+use crate::domain::Position;
 use crate::input::{KeyDisplay, XkbState};
 use evdev::Key;
 use gtk4::prelude::*;
@@ -8,6 +9,15 @@ use std::time::{Duration, Instant};
 const MAX_BUBBLES: usize = 10;
 const MAX_CHARS_PER_LINE: usize = 45;
 const NEW_BUBBLE_TIMEOUT_MS: u64 = 3000;
+
+#[must_use]
+pub fn alignment_for(position: Position) -> gtk4::Align {
+    match position {
+        Position::TopLeft | Position::MiddleLeft | Position::BottomLeft => gtk4::Align::Start,
+        Position::TopRight | Position::MiddleRight | Position::BottomRight => gtk4::Align::End,
+        Position::TopCenter | Position::Center | Position::BottomCenter => gtk4::Align::Center,
+    }
+}
 
 #[derive(Default)]
 struct ModifierState {
@@ -38,13 +48,13 @@ struct ChatBubble {
 }
 
 impl ChatBubble {
-    fn new() -> Self {
+    fn new(align: gtk4::Align) -> Self {
         let label = Label::builder()
             .wrap(true)
             .wrap_mode(gtk4::pango::WrapMode::WordChar)
             .max_width_chars(MAX_CHARS_PER_LINE as i32)
             .xalign(0.0)
-            .halign(gtk4::Align::Start)
+            .halign(align)
             .build();
         label.add_css_class("bubble");
 
@@ -55,15 +65,29 @@ impl ChatBubble {
         }
     }
 
+    fn set_align(&self, align: gtk4::Align) {
+        self.label.set_halign(align);
+    }
+
+    /// Keeps the bubble at the widest it has ever been. A wrapping label's
+    /// natural width is its longest wrapped line, so without this the bubble
+    /// shrinks (and jumps) every time a word reflows onto a new line.
+    fn pin_width(&self) {
+        let (_, natural, _, _) = self.label.measure(gtk4::Orientation::Horizontal, -1);
+        self.label.set_width_request(natural);
+    }
+
     fn append_char(&mut self, c: char) {
         self.text.push(c);
         self.label.set_text(&self.text);
+        self.pin_width();
         self.last_modified = Instant::now();
     }
 
     fn backspace(&mut self) {
         self.text.pop();
         self.label.set_text(&self.text);
+        self.pin_width();
         self.last_modified = Instant::now();
     }
 
@@ -179,6 +203,7 @@ pub struct BubbleDisplayWidget {
     want_new_bubble: bool,
     xkb_state: XkbState,
     pressed_keys: HashMap<Key, u32>,
+    align: gtk4::Align,
 }
 
 impl BubbleDisplayWidget {
@@ -201,6 +226,19 @@ impl BubbleDisplayWidget {
             want_new_bubble: false,
             xkb_state: XkbState::default(),
             pressed_keys: HashMap::new(),
+            align: gtk4::Align::Start,
+        }
+    }
+
+    pub fn set_alignment(&mut self, align: gtk4::Align) {
+        if self.align == align {
+            return;
+        }
+
+        self.align = align;
+        self.container.set_halign(align);
+        for bubble in &self.bubbles {
+            bubble.set_align(align);
         }
     }
 
@@ -335,7 +373,7 @@ impl BubbleDisplayWidget {
             }
         }
 
-        let bubble = ChatBubble::new();
+        let bubble = ChatBubble::new(self.align);
         self.container.append(bubble.widget());
         self.bubbles.push_back(bubble);
     }
@@ -384,6 +422,13 @@ impl BubbleDisplayWidget {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_alignment_for_position() {
+        assert_eq!(alignment_for(Position::BottomLeft), gtk4::Align::Start);
+        assert_eq!(alignment_for(Position::MiddleRight), gtk4::Align::End);
+        assert_eq!(alignment_for(Position::Center), gtk4::Align::Center);
+    }
 
     #[test]
     fn test_is_ignored_key() {

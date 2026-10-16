@@ -235,17 +235,14 @@ impl AudioDispatcher {
                                 let _ = self.cmd_tx.try_send(PlayCommand::Play(Box::new(source)));
                             }
                         }
-                        KeyDefine::Single(range) => {
-                            if range.len() >= 2 {
-                                let start = range[0];
-                                let duration = range[1];
-                                if let Some(buffer) = pack.buffers.get("main") {
-                                    let source = buffer
-                                        .to_source_slice(start, duration)
-                                        .amplify(state.volume);
-                                    let _ =
-                                        self.cmd_tx.try_send(PlayCommand::Play(Box::new(source)));
-                                }
+                        KeyDefine::Single(range) if range.len() >= 2 => {
+                            let start = range[0];
+                            let duration = range[1];
+                            if let Some(buffer) = pack.buffers.get("main") {
+                                let source = buffer
+                                    .to_source_slice(start, duration)
+                                    .amplify(state.volume);
+                                let _ = self.cmd_tx.try_send(PlayCommand::Play(Box::new(source)));
                             }
                         }
                         _ => {}

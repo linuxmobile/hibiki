@@ -7,8 +7,6 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
-/// Manages the lifecycle of the visual feedback overlay.
-/// Handles creation, display, and auto-hiding of notification bubbles.
 pub struct OverlayManager {
     window: ApplicationWindow,
     bubble: OsdBubble,

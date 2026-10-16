@@ -1,6 +1,6 @@
 use crate::application::config_service::ConfigService;
 use crate::application::typography_service::TypographyService;
-use crate::domain::config::{KeystrokeConfig, Position, SuperKeyIconMode};
+use crate::domain::config::{GlobalShortcutsBackend, KeystrokeConfig, Position, SuperKeyIconMode};
 use crate::infrastructure::audio::SoundPackLoader;
 use gtk4::prelude::*;
 use gtk4::{
@@ -74,7 +74,7 @@ pub fn create_settings_window(
         .build();
     let sound_content = create_sound_settings(&config_service, &window);
     sound_scroll.set_child(Some(&sound_content));
-    stack.add_titled(&sound_scroll, Some("sound"), "Switch Sounds");
+    stack.add_titled(&sound_scroll, Some("sound"), "Sounds");
 
     main_box.append(&stack);
     window.set_child(Some(&main_box));
@@ -396,6 +396,8 @@ fn create_position_section(
     is_bubble: bool,
 ) -> GtkBox {
     let pos_section = GtkBox::new(Orientation::Vertical, 12);
+    pos_section.set_hexpand(true);
+    pos_section.set_vexpand(true);
     let pos_label = Label::builder()
         .label("POSITION")
         .css_classes(vec!["heading", "caption"])
@@ -406,7 +408,12 @@ fn create_position_section(
     let pos_grid = Grid::builder()
         .row_spacing(6)
         .column_spacing(6)
-        .halign(Align::Start)
+        .halign(Align::Fill)
+        .valign(Align::Fill)
+        .hexpand(true)
+        .vexpand(true)
+        .column_homogeneous(true)
+        .row_homogeneous(true)
         .css_classes(vec!["position-grid"])
         .build();
 
@@ -426,8 +433,8 @@ fn create_position_section(
 
     for (pos, col, row) in positions {
         let btn = ToggleButton::builder()
-            .width_request(42)
-            .height_request(22)
+            .hexpand(true)
+            .vexpand(true)
             .css_classes(vec!["position-toggle"])
             .build();
 
@@ -469,8 +476,6 @@ fn create_position_section(
     pos_section
 }
 
-/// Convert a GDK color to a `#rrggbb`/`#rrggbbaa` string understood by the CSS
-/// generator.
 fn rgba_to_hex(color: &gtk4::gdk::RGBA) -> String {
     let channel = |v: f32| (v * 255.0).round() as u8;
     let (r, g, b, a) = (
@@ -664,8 +669,22 @@ fn mode_from_index(index: u32) -> SuperKeyIconMode {
     }
 }
 
-/// Icons offered by the picker for a given mode. Symbolic mode is restricted to
-/// `*-symbolic` names; Icon mode offers the full theme.
+fn backend_index(backend: GlobalShortcutsBackend) -> u32 {
+    match backend {
+        GlobalShortcutsBackend::Auto => 0,
+        GlobalShortcutsBackend::Portal => 1,
+        GlobalShortcutsBackend::Evdev => 2,
+    }
+}
+
+fn backend_from_index(index: u32) -> GlobalShortcutsBackend {
+    match index {
+        1 => GlobalShortcutsBackend::Portal,
+        2 => GlobalShortcutsBackend::Evdev,
+        _ => GlobalShortcutsBackend::Auto,
+    }
+}
+
 fn icons_for_mode<'a>(
     mode: SuperKeyIconMode,
     all: &'a [String],
@@ -678,8 +697,7 @@ fn icons_for_mode<'a>(
     }
 }
 
-/// Load a PNG/WebP image for the settings preview, rejecting files without an
-/// alpha channel.
+/// Files without an alpha channel are rejected.
 fn load_preview_texture(path: &str) -> Option<gtk4::gdk::Texture> {
     let pixbuf = gtk4::gdk_pixbuf::Pixbuf::from_file(path).ok()?;
     if !pixbuf.has_alpha() {
@@ -1295,6 +1313,7 @@ fn create_keystroke_settings(
 
     let hk2_box = GtkBox::new(Orientation::Horizontal, 12);
     hk2_box.add_css_class("settings-element");
+    hk2_box.set_margin_bottom(8);
     let hk2_lbl = Label::builder()
         .label("Pause/Resume")
         .hexpand(true)
@@ -1307,6 +1326,54 @@ fn create_keystroke_settings(
     hk2_box.append(&hk2_lbl);
     hk2_box.append(&hk2_btn);
     card_content.append(&hk2_box);
+
+    let hk3_box = GtkBox::new(Orientation::Horizontal, 12);
+    hk3_box.add_css_class("settings-element");
+    let hk3_lbl = Label::builder()
+        .label("Toggle Mode")
+        .hexpand(true)
+        .xalign(0.0)
+        .build();
+    let hk3_btn = Button::builder()
+        .label(format_hotkey(&config.toggle_mode_hotkey))
+        .valign(Align::Center)
+        .build();
+    hk3_box.append(&hk3_lbl);
+    hk3_box.append(&hk3_btn);
+    card_content.append(&hk3_box);
+
+    let backend_box = GtkBox::new(Orientation::Vertical, 6);
+    backend_box.set_margin_top(12);
+    let backend_lbl = Label::builder()
+        .label("Shortcut Handling")
+        .css_classes(vec!["caption", "dim-label"])
+        .halign(Align::Start)
+        .xalign(0.0)
+        .build();
+    let backend_dd = DropDown::from_strings(&["Automatic", "Desktop portal", "Direct (device)"]);
+    backend_dd.set_halign(Align::Start);
+    backend_dd.set_selected(backend_index(config.global_shortcuts));
+    let backend_hint = Label::builder()
+        .label(
+            "The desktop portal lets the compositor own the shortcuts, so they no \
+             longer reach the focused app. Takes effect after a restart.",
+        )
+        .css_classes(vec!["caption", "dim-label"])
+        .wrap(true)
+        .xalign(0.0)
+        .build();
+    backend_box.append(&backend_lbl);
+    backend_box.append(&backend_dd);
+    backend_box.append(&backend_hint);
+
+    let backend_service = config_service.clone();
+    backend_dd.connect_selected_notify(move |dd| {
+        let mut cfg = backend_service.get_config();
+        cfg.global_shortcuts = backend_from_index(dd.selected());
+        let _ = backend_service.update_config(cfg);
+    });
+
+    card_content.append(&backend_box);
 
     b_right.append(&card_content);
 
@@ -1365,6 +1432,34 @@ fn create_keystroke_settings(
     stepper_box.append(&step_plus);
     max_box.append(&stepper_box);
     b_right.append(&max_box);
+
+    let word_box = GtkBox::new(Orientation::Horizontal, 12);
+    word_box.set_valign(Align::Center);
+    word_box.set_margin_top(24);
+    let word_label = Label::builder()
+        .label("Max Word Length")
+        .css_classes(vec!["body"])
+        .hexpand(true)
+        .xalign(0.0)
+        .build();
+    word_box.append(&word_label);
+
+    let word_stepper = GtkBox::new(Orientation::Horizontal, 0);
+    word_stepper.add_css_class("linked");
+
+    let word_minus = Button::builder().label("-").width_request(32).build();
+    let word_display = Button::builder()
+        .label(config.max_word_length.to_string())
+        .width_request(40)
+        .can_focus(false)
+        .build();
+    let word_plus = Button::builder().label("+").width_request(32).build();
+
+    word_stepper.append(&word_minus);
+    word_stepper.append(&word_display);
+    word_stepper.append(&word_plus);
+    word_box.append(&word_stepper);
+    b_right.append(&word_box);
 
     behavior_grid.attach(&b_right, 1, 0, 1, 1);
 
@@ -1465,6 +1560,28 @@ fn create_keystroke_settings(
         }
     });
 
+    let service_minus = config_service.clone();
+    let word_minus_display = word_display.clone();
+    word_minus.connect_clicked(move |_| {
+        let mut cfg = service_minus.get_config();
+        if cfg.max_word_length > 1 {
+            cfg.max_word_length -= 1;
+            word_minus_display.set_label(&cfg.max_word_length.to_string());
+            let _ = service_minus.update_config(cfg);
+        }
+    });
+
+    let service_plus = config_service.clone();
+    let word_plus_display = word_display.clone();
+    word_plus.connect_clicked(move |_| {
+        let mut cfg = service_plus.get_config();
+        if cfg.max_word_length < 50 {
+            cfg.max_word_length += 1;
+            word_plus_display.set_label(&cfg.max_word_length.to_string());
+            let _ = service_plus.update_config(cfg);
+        }
+    });
+
     setup_hotkey_capture(
         window,
         &hk1_btn,
@@ -1473,6 +1590,13 @@ fn create_keystroke_settings(
     );
 
     setup_hotkey_capture(window, &hk2_btn, config_service.clone(), HotkeyType::Pause);
+
+    setup_hotkey_capture(
+        window,
+        &hk3_btn,
+        config_service.clone(),
+        HotkeyType::ToggleMode,
+    );
 
     content_box
 }
@@ -1779,6 +1903,7 @@ enum HotkeyType {
     BubbleActivation,
     Pause,
     ToggleFocus,
+    ToggleMode,
 }
 
 fn setup_hotkey_capture(
@@ -1812,6 +1937,7 @@ fn setup_hotkey_capture(
                     HotkeyType::BubbleActivation => cfg.bubble.hotkey = accelerator.to_string(),
                     HotkeyType::Pause => cfg.pause_hotkey = accelerator.to_string(),
                     HotkeyType::ToggleFocus => cfg.toggle_focus_hotkey = accelerator.to_string(),
+                    HotkeyType::ToggleMode => cfg.toggle_mode_hotkey = accelerator.to_string(),
                 }
 
                 let _ = service_c.update_config(cfg);
@@ -1882,7 +2008,7 @@ fn create_sound_settings(config_service: &ConfigService, window: &ApplicationWin
     header_box.set_margin_top(16);
     header_box.set_margin_bottom(16);
     let header = Label::builder()
-        .label("Switch Sounds")
+        .label("Sounds")
         .css_classes(vec!["title-2"])
         .build();
     header_box.append(&header);
@@ -1904,7 +2030,7 @@ fn create_sound_settings(config_service: &ConfigService, window: &ApplicationWin
         .css_classes(vec!["body"])
         .build();
     let enable_sub = Label::builder()
-        .label("Play switch sounds for every key press.")
+        .label("Play sounds for every key press.")
         .xalign(0.0)
         .css_classes(vec!["caption", "dim-label"])
         .build();
@@ -2018,7 +2144,7 @@ fn create_sound_settings(config_service: &ConfigService, window: &ApplicationWin
     left_col.append(&folder_row);
 
     let search_entry = SearchEntry::builder()
-        .placeholder_text("Find switch sound...")
+        .placeholder_text("Find sound...")
         .build();
     left_col.append(&search_entry);
 
@@ -2179,7 +2305,7 @@ fn create_sound_settings(config_service: &ConfigService, window: &ApplicationWin
     info_btn.connect_clicked(move |_| {
         let dialog = gtk4::AlertDialog::builder()
             .modal(true)
-            .message("Adding your own switch sounds")
+            .message("Adding your own sounds")
             .detail(
                 "A sound pack is a folder containing a config.json (Mechvibes format) plus its \
                  audio files (WAV or OGG).\n\nSingle packs reference one file in \"sound\"; \
@@ -2293,7 +2419,7 @@ fn create_sound_settings(config_service: &ConfigService, window: &ApplicationWin
     content_box
 }
 
-fn format_hotkey(accelerator: &str) -> String {
+pub fn format_hotkey(accelerator: &str) -> String {
     if accelerator.is_empty() {
         return "None".to_string();
     }

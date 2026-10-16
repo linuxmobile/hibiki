@@ -1,3 +1,4 @@
+use crate::domain::config::DisplayMode;
 use crate::domain::{CaptureState, FocusState};
 use crate::presentation::overlay_manager::OverlayManager;
 use gtk4::Application;
@@ -32,6 +33,15 @@ impl FeedbackService {
                     FocusState::Unfocused => "Unfocused",
                 },
             }
+        };
+
+        self.overlay_manager.borrow_mut().show_feedback(text);
+    }
+
+    pub fn handle_mode_change(&self, mode: DisplayMode) {
+        let text = match mode {
+            DisplayMode::Keystroke => "Keystroke Mode",
+            DisplayMode::Bubble => "Bubble Mode",
         };
 
         self.overlay_manager.borrow_mut().show_feedback(text);

@@ -12,11 +12,7 @@ fn escape_css_string(s: &str) -> String {
         .replace('\r', "")
 }
 
-/// Validate and normalize a user-supplied CSS color.
-///
-/// Only a conservative, injection-safe subset is accepted: hex colors
-/// (`#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`) and `rgb()`/`rgba()` functional
-/// notation with numeric components. Anything else is rejected so it can never
+/// Only a conservative, injection-safe subset is accepted so a value can never
 /// break out of the declaration and inject arbitrary CSS.
 fn sanitize_color(value: &str) -> Option<String> {
     let value = value.trim();

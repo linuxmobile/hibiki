@@ -11,10 +11,6 @@ use tracing::warn;
 
 const LOGO_SVG: &[u8] = include_bytes!("../assets/logo-symbolic.svg");
 
-/// Label shown for a pressed key. Layout-dependent keys (letters, digits,
-/// punctuation) are translated through `xkb_state`, so the visualizer matches
-/// the active layout in both display modes; everything else keeps its symbolic
-/// name.
 fn key_label_from_layout(key: Key, xkb_state: &XkbState) -> String {
     if is_layout_key(key) {
         if let Some(utf8) = xkb_state.key_get_utf8(key) {
@@ -30,9 +26,6 @@ fn key_label_from_layout(key: Key, xkb_state: &XkbState) -> String {
     crate::input::keymap::key_to_display_name(key)
 }
 
-/// Whether a key is a command modifier: held alongside a character it forms a
-/// shortcut (`ctrl + c`) rather than typed text, so it must not be folded into a
-/// unified word.
 fn is_command_modifier(key: Key) -> bool {
     matches!(
         key,
@@ -45,9 +38,6 @@ fn is_command_modifier(key: Key) -> bool {
     )
 }
 
-/// The single printable character a key produces under the active layout, if
-/// any. Returns `None` for keys that do not type text (function keys, arrows,
-/// dead keys, ...), which then keep the regular per-key bubble treatment.
 fn unified_char(key: Key, xkb_state: &XkbState) -> Option<char> {
     if !is_layout_key(key) {
         return None;
@@ -61,8 +51,11 @@ fn unified_char(key: Key, xkb_state: &XkbState) -> Option<char> {
     }
 }
 
-/// Keys that end the word being typed, so the next character starts a new
-/// bubble.
+/// Only `backspace` edits the grouped word; `delete` renders as its own key.
+fn unify_edits_word(key: Key) -> bool {
+    matches!(key, Key::KEY_BACKSPACE)
+}
+
 fn is_word_break_key(key: Key) -> bool {
     matches!(
         key,
@@ -70,9 +63,6 @@ fn is_word_break_key(key: Key) -> bool {
     )
 }
 
-/// Render Hibiki's built-in logo into a texture at `size` logical pixels,
-/// tinted with the active theme's accent colors. Returns `None` if the SVG
-/// cannot be rasterized.
 pub fn hibiki_logo_texture(size: i32) -> Option<Texture> {
     let (bg_color, fg_color) = {
         let dummy = gtk4::Label::new(None);
@@ -116,11 +106,7 @@ pub fn hibiki_logo_texture(size: i32) -> Option<Texture> {
         .map(|pixbuf| Texture::for_pixbuf(&pixbuf))
 }
 
-/// Load the image selected for [`SuperKeyIconMode::Image`].
-///
-/// Only PNG/WebP files with an alpha channel are accepted so the keystroke
-/// bubble stays visible behind the icon; anything else is rejected with a
-/// warning and the built-in logo is used as a fallback.
+/// Only alpha-capable PNG/WebP is accepted so the bubble shows through.
 fn load_super_key_image(config: &SuperKeyIconConfig) -> Option<Texture> {
     if config.mode != SuperKeyIconMode::Image {
         return None;
@@ -159,29 +145,20 @@ fn load_super_key_image(config: &SuperKeyIconConfig) -> Option<Texture> {
 struct DisplayedKey {
     keys: Vec<Key>,
 
-    /// Set when this bubble is a unified word. Such a bubble renders its
-    /// accumulated text as a single label instead of one widget per key, and
-    /// is not tied to a held key (it fades out after the display duration).
     text: Option<String>,
 
-    /// How many times this exact combination was pressed in a row. Only shown
-    /// when duplicate grouping is enabled.
     count: usize,
 
     last_active: Instant,
 
     is_held: bool,
 
-    /// Whether a following keypress may be folded into this bubble. Cleared
-    /// once one of its modifiers is released, so a re-pressed modifier starts a
-    /// fresh bubble instead of resurrecting an old one.
+    /// Cleared when a modifier is released so a re-press starts a fresh bubble.
     extendable: bool,
 
     widget: Widget,
 }
 
-/// State of a displayed bubble captured while its widget is rebuilt (for
-/// example after the Super key icon changes).
 struct DisplayedKeyState {
     keys: Vec<Key>,
     text: Option<String>,
@@ -191,23 +168,13 @@ struct DisplayedKeyState {
     extendable: bool,
 }
 
-/// Decision for how a new keypress relates to the trailing bubble.
 #[derive(Debug, PartialEq, Eq)]
 enum MergeAction {
-    /// Append the pressed key to the trailing bubble (`ctrl + a` -> `ctrl + a + b`).
     Extend,
-    /// The same combination was pressed again; bump its repeat counter.
     Increment,
-    /// Start a new bubble.
     New,
 }
 
-/// Work out whether a keypress should be folded into the trailing bubble.
-///
-/// `separate_duplicate_keys` keeps every repeat in its own bubble; when it is
-/// disabled consecutive identical combinations are counted instead.
-/// `combine_modifier_keys` lets keys pressed while a modifier is held accumulate
-/// into the same bubble.
 fn decide_merge(
     last_keys: &[Key],
     last_extendable: bool,
@@ -258,14 +225,14 @@ pub struct KeyDisplayWidget {
 
     unify_words: bool,
 
-    /// How the Super/Meta key is drawn (built-in logo, theme icon or image).
+    max_word_length: usize,
+
+    backspace_edits_word: bool,
+
     super_key_icon: SuperKeyIconConfig,
 
-    /// Cached built-in logo, tinted with the active theme colors.
     logo_texture: Option<Texture>,
 
-    /// Cached user image for [`SuperKeyIconMode::Image`], if it loaded with an
-    /// alpha channel.
     super_key_image: Option<Texture>,
 
     xkb_state: XkbState,
@@ -296,6 +263,8 @@ impl KeyDisplayWidget {
             combine_modifier_keys: config.combine_modifier_keys,
             max_combo_keys: config.max_combo_keys,
             unify_words: config.unify_words,
+            max_word_length: config.max_word_length,
+            backspace_edits_word: config.backspace_edits_word,
             super_key_icon: config.super_key_icon.clone(),
             logo_texture,
             super_key_image,
@@ -307,13 +276,10 @@ impl KeyDisplayWidget {
         &self.container
     }
 
-    /// Apply a keyboard layout so character keys render what the layout produces.
     pub fn set_layout(&mut self, layout_name: &str) {
         self.xkb_state.set_layout(layout_name);
     }
 
-    /// Resolve the label for a key through the active layout, falling back to the
-    /// symbolic name for keys that do not produce a layout character.
     fn key_label(&self, key: Key) -> String {
         key_label_from_layout(key, &self.xkb_state)
     }
@@ -394,21 +360,28 @@ impl KeyDisplayWidget {
         self.displayed_keys.push_back(displayed);
     }
 
-    /// Try to fold a keypress into the trailing word bubble.
-    ///
-    /// Whitespace finalises the current word and `backspace`/`delete` edit it.
-    /// Returns `true` when the key was consumed as typed text. Shortcuts (a
-    /// `ctrl`/`alt`/`super` is held) and keys that do not type a character
-    /// return `false` so they fall back to the regular per-key bubble logic.
+    /// Returns `true` when the key was consumed as typed text rather than shown.
     fn try_unify(&mut self, key: Key) -> bool {
         if self.held_modifiers.iter().any(|m| is_command_modifier(*m)) {
             return false;
         }
 
-        match key {
-            Key::KEY_BACKSPACE | Key::KEY_DELETE => return self.unify_backspace(),
-            _ if is_word_break_key(key) => return self.unify_word_break(),
-            _ => {}
+        if unify_edits_word(key) {
+            if self.backspace_edits_word {
+                return self.unify_backspace();
+            }
+            // Backspace is shown as a key, but close the current word so the
+            // next character starts a fresh bubble.
+            if let Some(last) = self.displayed_keys.back_mut() {
+                if last.text.is_some() {
+                    last.extendable = false;
+                    last.last_active = Instant::now();
+                }
+            }
+            return false;
+        }
+        if is_word_break_key(key) {
+            return self.unify_word_break();
         }
 
         let Some(ch) = unified_char(key, &self.xkb_state) else {
@@ -423,8 +396,6 @@ impl KeyDisplayWidget {
         true
     }
 
-    /// Append a character to the trailing word, starting a new bubble when the
-    /// previous one was finalised by whitespace or is not a word bubble.
     fn unify_append(&mut self, ch: char) {
         let extend = self
             .displayed_keys
@@ -437,6 +408,16 @@ impl KeyDisplayWidget {
                 .back()
                 .and_then(|d| d.text.clone())
                 .unwrap_or_default();
+
+            if text.chars().count() >= self.max_word_length {
+                if let Some(last) = self.displayed_keys.back_mut() {
+                    last.extendable = false;
+                    last.last_active = Instant::now();
+                }
+                self.push_new_word(ch.to_string());
+                return;
+            }
+
             text.push(ch);
             self.replace_last_word(text);
         } else {
@@ -444,10 +425,7 @@ impl KeyDisplayWidget {
         }
     }
 
-    /// Finalise the trailing word so the next character starts a fresh bubble.
-    ///
-    /// The separator is always consumed so it never renders as a key bubble
-    /// while word unification is on, including when it auto-repeats.
+    /// Consumed even when repeating, so the separator never renders as a key.
     fn unify_word_break(&mut self) -> bool {
         let has_word = self
             .displayed_keys
@@ -464,8 +442,6 @@ impl KeyDisplayWidget {
         true
     }
 
-    /// Remove the last character of the trailing word, dropping the bubble once
-    /// it becomes empty. Returns `true` when a word bubble was affected.
     fn unify_backspace(&mut self) -> bool {
         let is_word = self.displayed_keys.back().is_some_and(|d| d.text.is_some());
 
@@ -491,10 +467,7 @@ impl KeyDisplayWidget {
         true
     }
 
-    /// Keep the trailing bubble alive while a held key auto-repeats.
-    ///
-    /// Word bubbles are not tied to a held key but must not expire while a key
-    /// is still auto-repeating.
+    /// Keeps a word bubble from expiring while a key is still auto-repeating.
     fn refresh_repeat(&mut self, key: Key) {
         if let Some(displayed) = self.displayed_keys.back_mut() {
             if displayed.text.is_some() {
@@ -526,7 +499,6 @@ impl KeyDisplayWidget {
         }
     }
 
-    /// Rebuild the trailing bubble in place after it absorbed a keypress.
     fn replace_last(&mut self, keys: Vec<Key>, count: usize) {
         let Some(old) = self.displayed_keys.pop_back() else {
             return;
@@ -548,7 +520,6 @@ impl KeyDisplayWidget {
         });
     }
 
-    /// Rebuild the trailing word bubble in place with updated text.
     fn replace_last_word(&mut self, text: String) {
         let Some(old) = self.displayed_keys.pop_back() else {
             return;
@@ -570,8 +541,6 @@ impl KeyDisplayWidget {
         });
     }
 
-    /// Push a brand new word bubble, trimming the oldest bubble when the visible
-    /// key limit is reached.
     fn push_new_word(&mut self, text: String) {
         while self.displayed_keys.len() >= self.max_keys {
             if let Some(old) = self.displayed_keys.pop_front() {
@@ -661,9 +630,6 @@ impl KeyDisplayWidget {
         key_box.upcast()
     }
 
-    /// Build the icon shown for a Super/Meta key, honouring the configured
-    /// [`SuperKeyIconMode`]. Falls back to Hibiki's logo whenever the chosen
-    /// icon or image is unavailable.
     fn create_super_key_image(&self) -> Image {
         match self.super_key_icon.mode {
             SuperKeyIconMode::Hibiki => self.logo_image(),
@@ -701,9 +667,6 @@ impl KeyDisplayWidget {
         }
     }
 
-    /// Rebuild the widgets of currently displayed bubbles so a changed Super
-    /// key icon becomes visible immediately, preserving their timing and held
-    /// state.
     fn refresh_widgets(&mut self) {
         let entries: Vec<DisplayedKeyState> = self
             .displayed_keys
@@ -742,7 +705,6 @@ impl KeyDisplayWidget {
         }
     }
 
-    /// Build a bubble that renders a unified word as a single label.
     fn create_word_widget(&self, text: &str) -> Widget {
         let key_box = GtkBox::builder()
             .orientation(Orientation::Horizontal)
@@ -853,7 +815,16 @@ impl KeyDisplayWidget {
         self.unify_words = unify;
     }
 
-    /// Swap the Super/Meta key icon at runtime and redraw visible bubbles.
+    #[allow(dead_code)]
+    pub fn set_backspace_edits_word(&mut self, edits: bool) {
+        self.backspace_edits_word = edits;
+    }
+
+    #[allow(dead_code)]
+    pub fn set_max_word_length(&mut self, max_word_length: usize) {
+        self.max_word_length = max_word_length.max(1);
+    }
+
     pub fn set_super_key_icon(&mut self, config: &SuperKeyIconConfig) {
         if self.super_key_icon == *config {
             return;
@@ -1063,6 +1034,15 @@ mod tests {
         assert!(!is_word_break_key(Key::KEY_A));
         assert!(!is_word_break_key(Key::KEY_BACKSPACE));
         assert!(!is_word_break_key(Key::KEY_LEFTCTRL));
+    }
+
+    #[test]
+    fn only_backspace_edits_a_unified_word() {
+        assert!(unify_edits_word(Key::KEY_BACKSPACE));
+        assert!(!unify_edits_word(Key::KEY_DELETE));
+        assert!(!unify_edits_word(Key::KEY_A));
+        // Delete must be shown as its own key, not erase the grouped word.
+        assert!(!is_word_break_key(Key::KEY_DELETE));
     }
 
     #[test]

@@ -5,6 +5,7 @@ const DEFAULT_DISPLAY_TIMEOUT_MS: u64 = 2000;
 const DEFAULT_BUBBLE_TIMEOUT_MS: u64 = 10000;
 const DEFAULT_MAX_KEYS: usize = 5;
 const DEFAULT_MAX_COMBO_KEYS: usize = 4;
+const DEFAULT_MAX_WORD_LENGTH: usize = 20;
 const DEFAULT_MARGIN: i32 = 20;
 
 pub trait Validate {
@@ -96,19 +97,27 @@ impl Position {
     }
 }
 
-/// How the Super/Meta key is drawn inside a keystroke bubble.
+/// How Hibiki registers its global hotkeys.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum GlobalShortcutsBackend {
+    /// Use the portal when available, otherwise raw device capture.
+    #[default]
+    Auto,
+    /// Only use the XDG Desktop Portal `GlobalShortcuts` interface.
+    Portal,
+    /// Only use raw device capture (evdev), ignoring the portal.
+    Evdev,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum SuperKeyIconMode {
-    /// Hibiki's built-in logo (the default).
     #[default]
     Hibiki,
-    /// A monochrome icon from the current icon theme, tinted like the key text.
     Symbolic,
-    /// A full-color icon from the current icon theme.
     Icon,
-    /// A user-supplied PNG/WebP image. It must carry an alpha channel so the
-    /// key background shows through.
+    /// Must be a PNG/WebP with an alpha channel so the key background shows through.
     Image,
 }
 
@@ -116,10 +125,7 @@ pub enum SuperKeyIconMode {
 #[serde(default)]
 pub struct SuperKeyIconConfig {
     pub mode: SuperKeyIconMode,
-    /// Icon name used by the [`SuperKeyIconMode::Symbolic`] and
-    /// [`SuperKeyIconMode::Icon`] modes (e.g. `start-here-symbolic`).
     pub icon_name: Option<String>,
-    /// Path to the image used by [`SuperKeyIconMode::Image`].
     pub image_path: Option<String>,
 }
 
@@ -171,11 +177,7 @@ pub struct BubbleConfig {
     pub font_family: String,
     pub font_size: f64,
     pub color: String,
-    /// Optional custom bubble background (any CSS color, e.g. `#1e1e2e`).
-    /// When `None`, the theme background is used.
     pub background: Option<String>,
-    /// Optional custom bubble text color (e.g. `#cdd6f4`).
-    /// When `None`, the theme foreground is used.
     pub foreground: Option<String>,
     pub position: Position,
     pub draggable: bool,
@@ -229,26 +231,17 @@ pub struct KeystrokeConfig {
 
     pub show_modifiers: bool,
 
-    /// When enabled, every keypress is rendered as its own bubble, so pressing
-    /// the same key twice (`f`, `f`) shows two bubbles. When disabled,
-    /// consecutive identical keys are collapsed into a single bubble that shows
-    /// how many times they were pressed.
     pub separate_duplicate_keys: bool,
 
-    /// When enabled, keys pressed while a modifier is held are appended to the
-    /// trailing bubble instead of starting a new one, e.g. `ctrl + a + b + c`
-    /// while `ctrl` stays pressed.
     pub combine_modifier_keys: bool,
 
-    /// Upper bound on how many keys (modifiers included) a single combined
-    /// bubble may hold before a new one is started.
     pub max_combo_keys: usize,
 
-    /// When enabled, consecutive typed characters are merged into a single
-    /// bubble that reads as the word being typed, e.g. `c`, `l`, `e`, `a`, `r`
-    /// becomes one `clear` bubble. Whitespace, enter and shortcuts
-    /// (`ctrl`/`alt`/`super`) still start a fresh bubble.
     pub unify_words: bool,
+
+    pub max_word_length: usize,
+
+    pub backspace_edits_word: bool,
 
     pub all_keyboards: bool,
 
@@ -262,12 +255,8 @@ pub struct KeystrokeConfig {
 
     pub keystroke_theme: String,
 
-    /// Optional custom key background (any CSS color, e.g. `#1e1e2e`).
-    /// When `None`, the theme background is used.
     pub background: Option<String>,
 
-    /// Optional custom key text color (e.g. `#cdd6f4`).
-    /// When `None`, the theme foreground is used.
     pub foreground: Option<String>,
 
     pub keystroke_draggable: bool,
@@ -278,11 +267,14 @@ pub struct KeystrokeConfig {
 
     pub toggle_focus_hotkey: String,
 
+    pub toggle_mode_hotkey: String,
+
+    pub global_shortcuts: GlobalShortcutsBackend,
+
     pub auto_detect_layout: bool,
 
     pub keyboard_layout: Option<String>,
 
-    /// How the Super/Meta key is rendered in keystroke bubbles.
     pub super_key_icon: SuperKeyIconConfig,
 
     pub bubble: BubbleConfig,
@@ -301,6 +293,8 @@ impl Validate for KeystrokeConfig {
         self.max_keys = self.max_keys.clamp(1, 50);
 
         self.max_combo_keys = self.max_combo_keys.clamp(2, 12);
+
+        self.max_word_length = self.max_word_length.clamp(1, 50);
 
         self.font_scale = self.font_scale.clamp(1.0, 10.0);
 
@@ -331,6 +325,8 @@ impl Default for KeystrokeConfig {
             combine_modifier_keys: false,
             max_combo_keys: DEFAULT_MAX_COMBO_KEYS,
             unify_words: false,
+            max_word_length: DEFAULT_MAX_WORD_LENGTH,
+            backspace_edits_word: false,
             all_keyboards: true,
             font_scale: 1.0,
             opacity: 1.0,
@@ -343,6 +339,8 @@ impl Default for KeystrokeConfig {
             keystroke_hotkey: "<Shift><Control>k".to_string(),
             pause_hotkey: "<Control>p".to_string(),
             toggle_focus_hotkey: "<Control>b".to_string(),
+            toggle_mode_hotkey: "<Shift><Control>t".to_string(),
+            global_shortcuts: GlobalShortcutsBackend::Auto,
             auto_detect_layout: true,
             keyboard_layout: None,
             super_key_icon: SuperKeyIconConfig::default(),
@@ -478,6 +476,47 @@ mod tests {
         config.validate();
         assert!(config.icon_name.is_none());
         assert!(config.image_path.is_none());
+    }
+
+    #[test]
+    fn test_max_word_length_validation() {
+        let mut config = KeystrokeConfig {
+            max_word_length: 0,
+            ..Default::default()
+        };
+        config.validate();
+        assert_eq!(config.max_word_length, 1);
+
+        config.max_word_length = 999;
+        config.validate();
+        assert_eq!(config.max_word_length, 50);
+    }
+
+    #[test]
+    fn test_toggle_mode_hotkey_default_and_roundtrip() {
+        let config = KeystrokeConfig::default();
+        assert_eq!(config.toggle_mode_hotkey, "<Shift><Control>t");
+        assert_eq!(config.global_shortcuts, GlobalShortcutsBackend::Auto);
+        assert!(!config.backspace_edits_word);
+
+        let toml = toml::to_string_pretty(&config).unwrap();
+        let parsed: KeystrokeConfig = toml::from_str(&toml).unwrap();
+        assert_eq!(parsed.toggle_mode_hotkey, config.toggle_mode_hotkey);
+        assert_eq!(parsed.max_word_length, config.max_word_length);
+        assert_eq!(parsed.global_shortcuts, config.global_shortcuts);
+        assert_eq!(parsed.backspace_edits_word, config.backspace_edits_word);
+    }
+
+    #[test]
+    fn test_global_shortcuts_backend_roundtrip() {
+        let config = KeystrokeConfig {
+            global_shortcuts: GlobalShortcutsBackend::Evdev,
+            ..Default::default()
+        };
+        let toml = toml::to_string_pretty(&config).unwrap();
+        assert!(toml.contains("global_shortcuts = \"evdev\""));
+        let parsed: KeystrokeConfig = toml::from_str(&toml).unwrap();
+        assert_eq!(parsed.global_shortcuts, GlobalShortcutsBackend::Evdev);
     }
 
     #[test]

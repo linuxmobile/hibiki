@@ -1145,6 +1145,7 @@ dependencies = [
  "async-channel",
  "cpal",
  "criterion",
+ "dbus",
  "dirs",
  "evdev",
  "font-kit",

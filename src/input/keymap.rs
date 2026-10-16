@@ -188,12 +188,6 @@ pub fn is_super_key(key: Key) -> bool {
     matches!(key, Key::KEY_LEFTMETA | Key::KEY_RIGHTMETA)
 }
 
-/// Whether a key's printed label should come from the active keyboard layout.
-///
-/// Letters, digits and punctuation are translated through XKB so the visualizer
-/// reflects the layout the user is actually typing on. Keys with a fixed
-/// emblem (modifiers, function keys, arrows, keypad, media keys, ...) keep
-/// their symbolic name, and unmapped keys are translated whenever XKB can.
 #[must_use]
 pub fn is_layout_key(key: Key) -> bool {
     match KEY_NAMES.get(&key) {

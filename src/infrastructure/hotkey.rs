@@ -9,6 +9,7 @@ pub struct GlobalHotKeyManager {
     focus_hotkey: HotkeyCombo,
     pause_hotkey: HotkeyCombo,
     toggle_focus_hotkey: HotkeyCombo,
+    toggle_mode_hotkey: HotkeyCombo,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -31,6 +32,7 @@ impl GlobalHotKeyManager {
             focus_hotkey: HotkeyCombo::default(),
             pause_hotkey: HotkeyCombo::default(),
             toggle_focus_hotkey: HotkeyCombo::default(),
+            toggle_mode_hotkey: HotkeyCombo::default(),
         }
     }
 
@@ -54,6 +56,11 @@ impl GlobalHotKeyManager {
         self.toggle_focus_hotkey = parse_accelerator(accelerator);
     }
 
+    pub fn set_toggle_mode_hotkey(&mut self, accelerator: &str) {
+        info!("Setting toggle mode hotkey to: {}", accelerator);
+        self.toggle_mode_hotkey = parse_accelerator(accelerator);
+    }
+
     pub fn process(&mut self, key: Key, pressed: bool) -> Option<Command> {
         if pressed {
             self.pressed_keys.insert(key);
@@ -64,6 +71,10 @@ impl GlobalHotKeyManager {
 
             if self.is_combo_matched(&self.focus_hotkey, key) {
                 return Some(Command::ActivateBubbleMode);
+            }
+
+            if self.is_combo_matched(&self.toggle_mode_hotkey, key) {
+                return Some(Command::ToggleMode);
             }
 
             if self.is_combo_matched(&self.pause_hotkey, key) {

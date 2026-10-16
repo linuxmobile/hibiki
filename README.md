@@ -11,15 +11,15 @@ And yes, it's written in Rust, so you already know it's blazing fast and memory-
 - **Wayland Native**: No more X11 workarounds; built to work with modern compositors.
 - **Two Display Modes**:
   - **Keystroke**: The classic view for showing exactly what you're hitting.
-    - **Unify Words**: Optionally fold consecutive typed characters into a single bubble per word (`c`, `l`, `e`, `a`, `r` → `clear`) to cut down on clutter.
+    - **Unify Words**: Optionally fold consecutive typed characters into a single bubble per word (`c`, `l`, `e`, `a`, `r` → `clear`) to cut down on clutter. Backspace is drawn as its own key and starts a new word instead of erasing the grouped text; set `backspace_edits_word = true` in the config file to restore word editing.
   - **Bubble**: A sleek, minimal style inspired by [devaslife's setup](https://www.youtube.com/watch?v=zu_vqAWHy_E).
 - **Native Audio Engine**:
   - Built-in `rodio`-based audio engine on a dedicated thread.
   - Compatible with **Mechvibes** sound packs (single and multi-file support).
   - Zero-copy sample playback for low latency.
-  - **Switch Sounds** are a standalone feature: enable them alongside Keystroke
+  - **Sounds** are a standalone feature: enable them alongside Keystroke
     or Bubble mode, or turn off the visualizer to *only* hear the keystrokes.
-    Configured once under **Settings → Switch Sounds**.
+    Configured once under **Settings → Sounds**.
 - **Modern Configuration**:
   - Configuration migrated to `config.toml` (auto-migrates from old JSON).
   - **Granular Typography**: Customize font family, weight, and size per mode.
@@ -122,15 +122,15 @@ ignored and the built-in logo is used instead. Everything is configurable from
 **Settings → Keystrokes → Super Key Icon**, which offers a searchable icon
 picker with a live preview.
 
-### Switch sounds
+### Sounds
 
-Key switch sounds are configured once and shared by every mode. They used to
+Key sounds are configured once and shared by every mode. They used to
 live under `[audio]` / `[bubble.audio]`; existing configs are migrated
 automatically on load.
 
 ```toml
 [sound]
-enabled = true                  # play switch sounds on every keypress
+enabled = true                  # play sounds on every keypress
 volume = 0.8                    # 0.0 – 1.0
 sound_pack = "cherrymx-blue-abs"
 
@@ -141,7 +141,7 @@ sound_pack = "cherrymx-blue-abs"
 show_visual = true
 ```
 
-Some switch sounds are **built into the binary**, so they are available no
+Some sounds are **built into the binary**, so they are available no
 matter how Hibiki was installed (`cargo install`, Nix, or a plain binary):
 
 - CherryMX Blue (ABS) — `cherrymx-blue-abs`
@@ -151,13 +151,13 @@ matter how Hibiki was installed (`cargo install`, Nix, or a plain binary):
 - NK Cream — `nk-cream`
 
 To add more, drop Mechvibes-format pack folders into
-`~/.local/share/hibiki/sounds`, or use **Switch Sounds → Choose folder…** to
+`~/.local/share/hibiki/sounds`, or use **Settings → Sounds → Choose folder…** to
 load packs from any other directory. A pack is a folder containing a
 `config.json` plus its audio files (`wav`/`ogg`); the info button in that tab
 has the details. Packs found in a folder override built-ins with the same name.
 
 Flip sound and visual on/off at runtime with `hibiki --sound-toggle` and
-`hibiki --visual-toggle`, or from the **Settings → Switch Sounds** tab.
+`hibiki --visual-toggle`, or from the **Settings → Sounds** tab.
 
 ## Control from the compositor (CLI)
 
@@ -169,22 +169,61 @@ hibiki --keystroke-toggle   # switch to keystroke mode (alias: --keystroke, -k)
 hibiki --bubble-toggle      # switch to bubble mode    (alias: --bubble, -b)
 hibiki --toggle             # toggle between the two modes (-t)
 hibiki --pause-toggle       # pause/resume capture      (-p)
-hibiki --sound-toggle       # enable/disable switch sounds
+hibiki --sound-toggle       # enable/disable sounds
 hibiki --visual-toggle      # show/hide the visualizer (sound only)
 hibiki --settings           # open settings
 hibiki --launcher           # bring the launcher back up
 hibiki --quit               # quit the running instance
+hibiki --daemon             # start detached in the background (-d)
 ```
 
 All commands are forwarded to an already-running instance over D-Bus; if none
 is running, the first command also starts Hibiki. This makes them ideal for
-compositor keybindings. For example, on Hyprland:
+compositor keybindings. The commands are silent by default; add `--verbose`
+(`-v`) or set `RUST_LOG` to see logs. For example, on Hyprland:
 
 ```ini
 bind = SUPER, K, exec, hibiki --keystroke-toggle
 bind = SUPER, B, exec, hibiki --bubble-toggle
 bind = SUPER, P, exec, hibiki --pause-toggle
 ```
+
+### In-app global hotkeys
+
+Hibiki also listens for its own global hotkeys directly on the keyboard
+devices, so they work on any compositor (KDE, GNOME, Hyprland, Niri, Umbriel,
+Sway, …) without extra configuration. They are captured in **Settings**, and
+the current bindings are always shown in the launcher:
+
+| Action                        | Default              |
+| ----------------------------- | -------------------- |
+| Toggle keystroke / bubble     | `Ctrl + Shift + T`   |
+| Toggle focus (Bubble mode)    | `Ctrl + B`           |
+| Lose focus (Bubble mode)      | `Esc`                |
+| Pause / resume capture        | `Ctrl + P`           |
+| Switch to keystroke mode      | `Ctrl + Shift + K`   |
+| Switch to bubble mode         | `Ctrl + Shift + B`   |
+
+#### Avoiding conflicts with other applications
+
+Because Hibiki reads the keyboard directly, a combo it handles (for example
+`Ctrl + Shift + B`) is *also* still delivered to the focused application, which
+can trigger the browser's own shortcuts.
+
+To avoid this, Hibiki can register its hotkeys through the XDG Desktop Portal
+`GlobalShortcuts` interface. The desktop then owns the combos, does not forward
+them to the focused app, and shows them in its own shortcut settings so they can
+be rebound. Pick the behaviour under **Settings → General → Shortcut Handling**:
+
+| Mode                 | Behaviour                                                        |
+| -------------------- | ---------------------------------------------------------------- |
+| **Automatic** (default) | Use the portal when the desktop supports it, otherwise fall back to direct device capture. |
+| **Desktop portal**   | Only use the portal (Hotkeys are inactive if it is unavailable). |
+| **Direct (device)**  | Only use direct evdev capture, ignoring the portal.              |
+
+The portal is available on desktops that implement it (for example recent
+GNOME and KDE Plasma); everywhere else Hibiki keeps working via direct capture.
+Changing the mode takes effect after a restart.
 
 ## Contributing & Help Needed
 

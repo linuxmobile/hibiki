@@ -4,6 +4,7 @@ use super::state::{CaptureState, FocusState};
 pub enum Command {
     ActivateKeystrokeMode,
     ActivateBubbleMode,
+    ToggleMode,
     TogglePause,
     ToggleFocus,
     SetCaptureState(CaptureState),

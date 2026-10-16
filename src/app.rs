@@ -4,14 +4,17 @@ use crate::application::feedback_service::FeedbackService;
 use crate::application::routing::{RoutingEngine, RoutingResult};
 use crate::application::typography_service::TypographyService;
 use crate::compositor::LayoutEvent;
-use crate::domain::{CaptureState, KeystrokeConfig};
+use crate::domain::FocusState;
+use crate::domain::{CaptureState, Command, GlobalShortcutsBackend, KeystrokeConfig};
+use crate::infrastructure::portal_shortcuts::{self, PortalHandle, Shortcut};
 use crate::input::{
     InputControlCommand, KeyEvent, KeyListener, LayoutManager, ListenerConfig, ListenerHandle,
 };
 use crate::tray::{AppAction, TrayHandle};
 use crate::ui::{
-    create_bubble_window, create_launcher_window, create_settings_window, create_window,
-    setup_drag, show_launcher, show_settings, BubbleDisplayWidget, DisplayMode, KeyDisplayWidget,
+    alignment_for, create_bubble_window, create_launcher_window, create_settings_window,
+    create_window, setup_drag, show_launcher, show_settings, BubbleDisplayWidget, DisplayMode,
+    KeyDisplayWidget,
 };
 use anyhow::Result;
 use async_channel::{bounded, Receiver};
@@ -35,12 +38,7 @@ pub struct App {
     #[allow(dead_code)]
     audio_engine: Arc<Mutex<Option<AudioEngine>>>,
     audio_dispatcher: Option<AudioDispatcher>,
-    /// Filled in by `activate`/`activate_without_tray` so that CLI commands
-    /// forwarded to an already-running instance (or handled on first launch)
-    /// can reach the live runtime state.
     state_slot: Rc<RefCell<Option<Rc<RefCell<RuntimeState>>>>>,
-    /// Set once the system tray is up. CLI commands use it to keep the tray
-    /// icon in sync (e.g. pause state).
     tray_slot: Rc<RefCell<Option<TrayHandle>>>,
 }
 
@@ -61,6 +59,8 @@ struct RuntimeState {
     css_provider: Option<CssProvider>,
     audio_dispatcher: Option<AudioDispatcher>,
     audio_engine: Option<AudioEngine>,
+    portal_handle: Option<PortalHandle>,
+    use_portal: bool,
 }
 
 impl App {
@@ -110,11 +110,6 @@ impl App {
         }
     }
 
-    /// Register with the session bus and report whether another instance
-    /// already owns the application id.
-    ///
-    /// Primary instances start the system tray; secondary invocations only
-    /// forward their command line to the primary and exit.
     #[must_use]
     pub fn is_remote(&self) -> bool {
         if let Err(e) = self.gtk_app.register(gtk4::gio::Cancellable::NONE) {
@@ -180,7 +175,7 @@ impl App {
 /// forwarded to an already-running instance.
 fn register_cli_options(app: &Application) {
     let none = glib::Char(0);
-    let entries: [(&str, glib::Char, &str); 12] = [
+    let entries: [(&str, glib::Char, &str); 14] = [
         (
             "keystroke-toggle",
             glib::Char::from(b'k'),
@@ -203,7 +198,7 @@ fn register_cli_options(app: &Application) {
             glib::Char::from(b'p'),
             "Pause or resume key capture",
         ),
-        ("sound-toggle", none, "Enable or disable key switch sounds"),
+        ("sound-toggle", none, "Enable or disable key sounds"),
         (
             "visual-toggle",
             none,
@@ -217,6 +212,12 @@ fn register_cli_options(app: &Application) {
             glib::Char::from(b'n'),
             "Skip the launcher on startup",
         ),
+        (
+            "daemon",
+            glib::Char::from(b'd'),
+            "Run detached in the background",
+        ),
+        ("verbose", glib::Char::from(b'v'), "Show detailed logs"),
     ];
 
     for (long_name, short_name, description) in entries {
@@ -231,10 +232,6 @@ fn register_cli_options(app: &Application) {
     }
 }
 
-/// Translate the parsed CLI options into runtime actions.
-///
-/// `GApplication` parses the registered options and forwards them to the
-/// primary instance through [`gio::ApplicationCommandLine::options_dict`].
 fn actions_from_options(cmdline: &gio::ApplicationCommandLine) -> Vec<AppAction> {
     let options = cmdline.options_dict();
     actions_from_flags(|key| options.contains(key))
@@ -338,15 +335,7 @@ fn activate_without_tray(
     state.borrow_mut().audio_engine = audio_engine;
 
     let config = config_service.get_config();
-    {
-        let mut s = state.borrow_mut();
-        s.routing_engine.update_config(
-            &config.keystroke_hotkey,
-            &config.bubble.hotkey,
-            &config.pause_hotkey,
-            &config.toggle_focus_hotkey,
-        );
-    }
+    apply_hotkey_config(&state, &config);
 
     let css_provider = load_css_defaults();
 
@@ -354,6 +343,8 @@ fn activate_without_tray(
     state.borrow_mut().css_provider = Some(css_provider);
 
     setup_launcher_and_modes(app, &state, config_service.clone(), no_ui);
+
+    setup_portal(app, &state, config_service, None);
 
     *state_slot.borrow_mut() = Some(Rc::clone(&state));
 }
@@ -377,15 +368,7 @@ fn activate(
     state.borrow_mut().audio_engine = audio_engine;
 
     let config = config_service.get_config();
-    {
-        let mut s = state.borrow_mut();
-        s.routing_engine.update_config(
-            &config.keystroke_hotkey,
-            &config.bubble.hotkey,
-            &config.pause_hotkey,
-            &config.toggle_focus_hotkey,
-        );
-    }
+    apply_hotkey_config(&state, &config);
 
     let css_provider = load_css_defaults();
 
@@ -393,6 +376,8 @@ fn activate(
     state.borrow_mut().css_provider = Some(css_provider);
 
     setup_launcher_and_modes(app, &state, config_service.clone(), no_ui);
+
+    setup_portal(app, &state, config_service, Some(tray_handle.clone()));
 
     setup_tray_handling(
         Rc::clone(&state),
@@ -403,6 +388,160 @@ fn activate(
     );
 
     *state_slot.borrow_mut() = Some(state);
+}
+
+/// With the portal owning the shortcuts, evdev matching is disabled so a combo
+/// is never handled twice.
+fn apply_hotkey_config(state: &Rc<RefCell<RuntimeState>>, config: &KeystrokeConfig) {
+    let mut s = state.borrow_mut();
+    if s.use_portal {
+        s.routing_engine.update_config("", "", "", "", "");
+    } else {
+        s.routing_engine.update_config(
+            &config.keystroke_hotkey,
+            &config.bubble.hotkey,
+            &config.pause_hotkey,
+            &config.toggle_focus_hotkey,
+            &config.toggle_mode_hotkey,
+        );
+    }
+}
+
+/// The exchange runs off the main thread; evdev matching stays active until the
+/// shortcuts are actually bound.
+fn setup_portal(
+    app: &Application,
+    state: &Rc<RefCell<RuntimeState>>,
+    config_service: &ConfigService,
+    tray_handle: Option<TrayHandle>,
+) {
+    let config = config_service.get_config();
+
+    if config.global_shortcuts == GlobalShortcutsBackend::Evdev {
+        return;
+    }
+
+    let shortcuts = vec![
+        Shortcut {
+            id: "keystroke-mode",
+            description: "Switch to keystroke mode",
+            trigger: portal_shortcuts::accelerator_to_trigger(&config.keystroke_hotkey),
+        },
+        Shortcut {
+            id: "bubble-mode",
+            description: "Switch to bubble mode",
+            trigger: portal_shortcuts::accelerator_to_trigger(&config.bubble.hotkey),
+        },
+        Shortcut {
+            id: "toggle-mode",
+            description: "Toggle keystroke/bubble mode",
+            trigger: portal_shortcuts::accelerator_to_trigger(&config.toggle_mode_hotkey),
+        },
+        Shortcut {
+            id: "pause",
+            description: "Pause or resume key capture",
+            trigger: portal_shortcuts::accelerator_to_trigger(&config.pause_hotkey),
+        },
+        Shortcut {
+            id: "toggle-focus",
+            description: "Toggle focus (bubble mode)",
+            trigger: portal_shortcuts::accelerator_to_trigger(&config.toggle_focus_hotkey),
+        },
+    ];
+
+    let (handle, ready_rx, command_rx) = portal_shortcuts::start(shortcuts);
+    state.borrow_mut().portal_handle = Some(handle);
+
+    let state_c = Rc::clone(state);
+    let app_c = app.clone();
+    let service_c = config_service.clone();
+
+    glib::MainContext::default().spawn_local(async move {
+        let Ok(Ok(())) = ready_rx.recv().await else {
+            if service_c.get_config().global_shortcuts == GlobalShortcutsBackend::Portal {
+                // The user asked to rely exclusively on the portal.
+                state_c.borrow_mut().use_portal = true;
+                apply_hotkey_config(&state_c, &service_c.get_config());
+                warn!("GlobalShortcuts portal is unavailable; global hotkeys are inactive");
+            } else {
+                debug!("Global hotkeys stay on raw device capture (portal unavailable)");
+            }
+            return;
+        };
+
+        info!("Global hotkeys are now owned by the desktop portal");
+        state_c.borrow_mut().use_portal = true;
+        apply_hotkey_config(&state_c, &service_c.get_config());
+
+        while let Ok(command) = command_rx.recv().await {
+            handle_portal_command(&command, &state_c, &service_c, &app_c, tray_handle.as_ref());
+        }
+    });
+}
+
+fn handle_portal_command(
+    command: &Command,
+    state: &Rc<RefCell<RuntimeState>>,
+    config_service: &ConfigService,
+    app: &Application,
+    tray_handle: Option<&TrayHandle>,
+) {
+    match command {
+        Command::ActivateKeystrokeMode => {
+            show_mode_feedback(state, DisplayMode::Keystroke);
+            switch_mode(app, state, config_service, DisplayMode::Keystroke);
+        }
+        Command::ActivateBubbleMode => {
+            show_mode_feedback(state, DisplayMode::Bubble);
+            switch_mode(app, state, config_service, DisplayMode::Bubble);
+        }
+        Command::ToggleMode => {
+            let target = match state.borrow().mode {
+                Some(DisplayMode::Keystroke) => DisplayMode::Bubble,
+                _ => DisplayMode::Keystroke,
+            };
+            show_mode_feedback(state, target);
+            switch_mode(app, state, config_service, target);
+        }
+        Command::TogglePause => {
+            handle_app_action(
+                &AppAction::TogglePause,
+                state,
+                config_service,
+                app,
+                tray_handle,
+            );
+        }
+        Command::ToggleFocus => toggle_focus(state),
+        Command::SetCaptureState(_) | Command::SetFocusState(_) => {}
+    }
+}
+
+fn toggle_focus(state: &Rc<RefCell<RuntimeState>>) {
+    if state.borrow().mode != Some(DisplayMode::Bubble) {
+        return;
+    }
+
+    let (capture, focus) = {
+        let mut s = state.borrow_mut();
+        let focus = s.routing_engine.toggle_focus();
+        (s.routing_engine.get_states().0, focus)
+    };
+
+    let settings_open = state.borrow().settings_window.is_some();
+    let s = state.borrow();
+
+    if let Some(service) = &s.feedback_service {
+        service.handle_state_change(capture, focus);
+    }
+
+    if let Some(handle) = &s.listener_handle {
+        if capture == CaptureState::Active && focus == FocusState::Focused && !settings_open {
+            handle.send_command(InputControlCommand::Grab);
+        } else {
+            handle.send_command(InputControlCommand::Ungrab);
+        }
+    }
 }
 
 fn setup_launcher_and_modes(
@@ -433,7 +572,12 @@ fn setup_launcher_and_modes(
         );
     };
 
-    let launcher = create_launcher_window(app, on_mode_select, on_settings);
+    let launcher = create_launcher_window(
+        app,
+        &config_service.get_config(),
+        on_mode_select,
+        on_settings,
+    );
 
     state.borrow_mut().launcher_window = Some(launcher.clone());
 
@@ -442,6 +586,12 @@ fn setup_launcher_and_modes(
         switch_mode(app, state, &config_service, mode);
     } else {
         show_launcher(&launcher);
+    }
+}
+
+fn show_mode_feedback(state: &Rc<RefCell<RuntimeState>>, mode: DisplayMode) {
+    if let Some(service) = &state.borrow().feedback_service {
+        service.handle_mode_change(mode);
     }
 }
 
@@ -652,7 +802,7 @@ fn handle_app_action(
             let enabled = cfg.sound.enabled;
             let _ = config_service.update_config(cfg);
             info!(
-                "Key switch sounds {}",
+                "Key sounds {}",
                 if enabled { "enabled" } else { "disabled" }
             );
         }
@@ -696,23 +846,42 @@ fn open_settings(
 
     state.borrow_mut().settings_window = Some(settings_window.clone());
 
+    // Bubble mode grabs the keyboard exclusively; release it while the settings
+    // window is open so its own keybind capture and text fields keep working.
+    release_mode_grab(state);
+
     let state_clone = Rc::clone(state);
     settings_window.connect_close_request(move |_| {
         state_clone.borrow_mut().settings_window = None;
+        restore_mode_grab(&state_clone);
         glib::Propagation::Proceed
     });
 
     show_settings(&settings_window);
 }
 
-/// Shared keyboard-layout detection for both display modes.
-///
-/// Builds a [`LayoutManager`], seeds the caller with the initial layout and
-/// streams later changes to `on_layout` on the GTK main context. The manager is
-/// stored in `state` so it lives (and is torn down) with the mode.
-///
-/// Returns the initial layout name so the caller can apply it immediately,
-/// before any layout event arrives.
+fn release_mode_grab(state: &Rc<RefCell<RuntimeState>>) {
+    let s = state.borrow();
+    if let Some(handle) = &s.listener_handle {
+        handle.send_command(InputControlCommand::Ungrab);
+    }
+}
+
+fn restore_mode_grab(state: &Rc<RefCell<RuntimeState>>) {
+    let s = state.borrow();
+    if s.mode != Some(DisplayMode::Bubble) {
+        return;
+    }
+    if let Some(handle) = &s.listener_handle {
+        let (capture, focus) = s.routing_engine.get_states();
+        if capture == CaptureState::Active && focus == FocusState::Focused {
+            handle.send_command(InputControlCommand::Grab);
+        }
+    }
+}
+
+/// Returns the initial layout name so the caller can apply it before any layout
+/// event arrives.
 fn setup_layout_tracking<F>(
     state: &Rc<RefCell<RuntimeState>>,
     config: &KeystrokeConfig,
@@ -882,6 +1051,8 @@ fn start_keystroke_mode(
                     }
                 }
                 RoutingResult::SwitchMode(mode) => {
+                    show_mode_feedback(&state_clone, mode);
+
                     let app = app_clone.clone();
                     let state = state_clone.clone();
                     let service = config_service_clone.clone();
@@ -918,12 +1089,7 @@ fn start_keystroke_mode(
             }
             let cfg = rx.borrow().clone();
 
-            state_c.borrow_mut().routing_engine.update_config(
-                &cfg.keystroke_hotkey,
-                &cfg.bubble.hotkey,
-                &cfg.pause_hotkey,
-                &cfg.toggle_focus_hotkey,
-            );
+            apply_hotkey_config(&state_c, &cfg);
 
             if let Some(dispatcher) = &state_c.borrow().audio_dispatcher {
                 dispatcher.set_enabled(cfg.sound.enabled);
@@ -947,6 +1113,8 @@ fn start_keystroke_mode(
                 disp.set_combine_modifier_keys(cfg.combine_modifier_keys);
                 disp.set_max_combo_keys(cfg.max_combo_keys);
                 disp.set_unify_words(cfg.unify_words);
+                disp.set_max_word_length(cfg.max_word_length);
+                disp.set_backspace_edits_word(cfg.backspace_edits_word);
                 disp.set_super_key_icon(&cfg.super_key_icon);
             }
 
@@ -1044,6 +1212,9 @@ fn start_bubble_mode(
     let display = Rc::new(RefCell::new(BubbleDisplayWidget::new(
         config.bubble.timeout_ms,
     )));
+    display
+        .borrow_mut()
+        .set_alignment(alignment_for(config.bubble.position));
 
     let mode_active = Arc::new(AtomicBool::new(true));
     let visual_enabled = Rc::new(Cell::new(config.show_visual));
@@ -1123,9 +1294,11 @@ fn start_bubble_mode(
             match routing_result {
                 RoutingResult::Ignored => {}
                 RoutingResult::StateChanged(capture, focus) => {
+                    let settings_open = state_clone.borrow().settings_window.is_some();
                     if let Some(handle) = &state_clone.borrow().listener_handle {
                         if capture == CaptureState::Active
                             && focus == crate::domain::FocusState::Focused
+                            && !settings_open
                         {
                             handle.send_command(InputControlCommand::Grab);
                         } else {
@@ -1138,6 +1311,8 @@ fn start_bubble_mode(
                     }
                 }
                 RoutingResult::SwitchMode(mode) => {
+                    show_mode_feedback(&state_clone, mode);
+
                     let app = app.clone();
                     let state = state_clone.clone();
                     let service = config_service.clone();
@@ -1182,12 +1357,7 @@ fn start_bubble_mode(
             }
             let cfg = rx.borrow().clone();
 
-            state_c.borrow_mut().routing_engine.update_config(
-                &cfg.keystroke_hotkey,
-                &cfg.bubble.hotkey,
-                &cfg.pause_hotkey,
-                &cfg.toggle_focus_hotkey,
-            );
+            apply_hotkey_config(&state_c, &cfg);
 
             if let Some(dispatcher) = &state_c.borrow().audio_dispatcher {
                 dispatcher.set_enabled(cfg.sound.enabled);
@@ -1206,6 +1376,7 @@ fn start_bubble_mode(
             {
                 let mut disp = display_c.borrow_mut();
                 disp.set_display_duration(cfg.bubble.timeout_ms);
+                disp.set_alignment(alignment_for(cfg.bubble.position));
             }
 
             if let Some(provider) = &state_c.borrow().css_provider {

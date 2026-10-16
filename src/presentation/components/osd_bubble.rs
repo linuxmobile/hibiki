@@ -1,8 +1,6 @@
 use gtk4::prelude::*;
 use gtk4::{Align, Box as GtkBox, Label, Orientation};
 
-/// OSD Bubble component that displays system notifications.
-/// Designed as a pill-shaped, semi-transparent overlay.
 pub struct OsdBubble {
     container: GtkBox,
     label: Label,

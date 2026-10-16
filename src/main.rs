@@ -13,22 +13,25 @@ USAGE:
 
 OPTIONS:
     -n, --no-ui             Skip the launcher and start in the configured mode
+    -d, --daemon            Run in the background (detached, no UI)
     -k, --keystroke-toggle  Switch to keystroke mode
     -b, --bubble-toggle     Switch to bubble mode
         --keystroke         Alias for --keystroke-toggle
         --bubble            Alias for --bubble-toggle
     -t, --toggle            Toggle between keystroke and bubble mode
     -p, --pause-toggle      Pause or resume key capture
-        --sound-toggle      Enable or disable key switch sounds
+        --sound-toggle      Enable or disable key sounds
         --visual-toggle     Show or hide the on-screen visualizer
         --settings          Open the settings window
         --launcher          Show the launcher window
         --quit              Quit the running instance
+    -v, --verbose           Show detailed logs (info/debug)
     -h, --help              Print this help and exit
     -V, --version           Print the version and exit
 
 All control options are forwarded to an already-running instance, so they can
-be bound to compositor shortcuts, e.g. on Hyprland:
+be bound to compositor shortcuts. Use `hibiki --daemon` to start Hibiki
+silently in the background.
 
     bind = SUPER, K, exec, hibiki --keystroke-toggle
     bind = SUPER, B, exec, hibiki --bubble-toggle
@@ -37,8 +40,6 @@ be bound to compositor shortcuts, e.g. on Hyprland:
 ";
 
 fn main() -> Result<()> {
-    init_logging();
-
     let args: Vec<String> = std::env::args().collect();
 
     if args.iter().any(|a| a == "--help" || a == "-h") {
@@ -50,6 +51,17 @@ fn main() -> Result<()> {
         println!("hibiki {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
+
+    let verbose = args.iter().any(|a| a == "--verbose" || a == "-v");
+    let daemon = args.iter().any(|a| a == "--daemon" || a == "-d");
+
+    if daemon {
+        // Detach so compositor keybindings that launch Hibiki leave no stray process.
+        spawn_daemon(&args)?;
+        return Ok(());
+    }
+
+    init_logging(verbose);
 
     let no_ui = args.iter().any(|a| a == "--no-ui" || a == "-n");
 
@@ -104,12 +116,61 @@ fn main() -> Result<()> {
     }
 }
 
-fn init_logging() {
-    let filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,hibiki=debug"));
+fn init_logging(verbose: bool) {
+    let default = if verbose {
+        "info,hibiki=debug"
+    } else {
+        // Quiet by default: CLI control commands (`hibiki --toggle`, ...) are
+        // meant to be silent so compositor keybindings do not spam logs.
+        "warn"
+    };
+
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default));
 
     tracing_subscriber::registry()
         .with(filter)
         .with(tracing_subscriber::fmt::layer().with_target(false))
         .init();
+}
+
+/// The child starts with `--no-ui` unless a launcher/settings flag is given, and
+/// its standard streams go to `/dev/null`.
+fn spawn_daemon(args: &[String]) -> Result<()> {
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+
+    let exe = std::env::current_exe()?;
+    let forwarded: Vec<String> = args
+        .iter()
+        .skip(1)
+        .filter(|a| a.as_str() != "--daemon" && a.as_str() != "-d")
+        .cloned()
+        .collect();
+
+    let mut command = Command::new(exe);
+    command.args(&forwarded);
+
+    if !forwarded
+        .iter()
+        .any(|a| a == "--no-ui" || a == "-n" || a == "--settings" || a == "--launcher")
+    {
+        command.arg("--no-ui");
+    }
+
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+
+    // SAFETY: `setsid` is async-signal-safe and does not touch shared state.
+    unsafe {
+        command.pre_exec(|| {
+            let _ = nix::unistd::setsid();
+            Ok(())
+        });
+    }
+
+    command.spawn()?;
+    info!("Hibiki running in the background");
+    Ok(())
 }

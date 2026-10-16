@@ -70,6 +70,13 @@ impl RoutingEngine {
                     }
                     return RoutingResult::Ignored;
                 }
+                Command::ToggleMode => {
+                    let target = match current_mode {
+                        DisplayMode::Keystroke => DisplayMode::Bubble,
+                        DisplayMode::Bubble => DisplayMode::Keystroke,
+                    };
+                    return RoutingResult::SwitchMode(target);
+                }
                 Command::TogglePause => {
                     self.capture_state = match self.capture_state {
                         CaptureState::Active => CaptureState::Paused,
@@ -89,6 +96,16 @@ impl RoutingEngine {
                 }
                 _ => {}
             }
+        }
+
+        if enable_focus_toggle
+            && current_mode == DisplayMode::Bubble
+            && pressed
+            && key == Key::KEY_ESC
+            && self.focus_state == FocusState::Focused
+        {
+            self.focus_state = FocusState::Unfocused;
+            return RoutingResult::StateChanged(self.capture_state, self.focus_state);
         }
 
         if self.capture_state == CaptureState::Paused {
@@ -112,12 +129,15 @@ impl RoutingEngine {
         focus_hotkey: &str,
         pause_hotkey: &str,
         toggle_focus_hotkey: &str,
+        toggle_mode_hotkey: &str,
     ) {
         self.hotkey_manager.set_capture_hotkey(capture_hotkey);
         self.hotkey_manager.set_focus_hotkey(focus_hotkey);
         self.hotkey_manager.set_pause_hotkey(pause_hotkey);
         self.hotkey_manager
             .set_toggle_focus_hotkey(toggle_focus_hotkey);
+        self.hotkey_manager
+            .set_toggle_mode_hotkey(toggle_mode_hotkey);
     }
 
     pub fn reset_hotkey_state(&mut self) {
@@ -144,6 +164,7 @@ mod tests {
             "<Shift><Control>b",
             "<Control>p",
             "<Control>f",
+            "<Shift><Control>t",
         );
         engine
     }
@@ -191,6 +212,23 @@ mod tests {
         engine.process(Key::KEY_LEFTSHIFT, true, true, DisplayMode::Bubble);
         engine.process(Key::KEY_LEFTCTRL, true, true, DisplayMode::Bubble);
         let result = engine.process(Key::KEY_K, true, true, DisplayMode::Bubble);
+        assert_eq!(result, RoutingResult::SwitchMode(DisplayMode::Keystroke));
+    }
+
+    #[test]
+    fn test_toggle_mode_hotkey_switches_modes() {
+        let mut engine = setup_engine();
+
+        engine.process(Key::KEY_LEFTSHIFT, true, true, DisplayMode::Keystroke);
+        engine.process(Key::KEY_LEFTCTRL, true, true, DisplayMode::Keystroke);
+        let result = engine.process(Key::KEY_T, true, true, DisplayMode::Keystroke);
+        assert_eq!(result, RoutingResult::SwitchMode(DisplayMode::Bubble));
+
+        engine.reset_hotkey_state();
+
+        engine.process(Key::KEY_LEFTSHIFT, true, true, DisplayMode::Bubble);
+        engine.process(Key::KEY_LEFTCTRL, true, true, DisplayMode::Bubble);
+        let result = engine.process(Key::KEY_T, true, true, DisplayMode::Bubble);
         assert_eq!(result, RoutingResult::SwitchMode(DisplayMode::Keystroke));
     }
 
@@ -253,6 +291,27 @@ mod tests {
 
         let (_, focus) = engine.get_states();
         assert_eq!(focus, FocusState::Focused);
+    }
+
+    #[test]
+    fn test_escape_loses_focus_in_bubble_mode() {
+        let mut engine = setup_engine();
+
+        let result = engine.process(Key::KEY_ESC, true, true, DisplayMode::Bubble);
+        assert_eq!(
+            result,
+            RoutingResult::StateChanged(CaptureState::Active, FocusState::Unfocused)
+        );
+
+        let result = engine.process(Key::KEY_ESC, true, true, DisplayMode::Bubble);
+        assert_eq!(result, RoutingResult::Ignored);
+    }
+
+    #[test]
+    fn test_escape_is_dispatched_in_keystroke_mode() {
+        let mut engine = setup_engine();
+        let result = engine.process(Key::KEY_ESC, true, true, DisplayMode::Keystroke);
+        assert_eq!(result, RoutingResult::Dispatch(Key::KEY_ESC, true));
     }
 
     #[test]

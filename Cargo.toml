@@ -19,11 +19,13 @@ gtk4-layer-shell = "0.4"
 gdk-pixbuf = "0.20"
 # Input handling
 evdev = "0.12"
-nix = { version = "0.29", features = ["fs", "poll"] }
+nix = { version = "0.29", features = ["fs", "poll", "process"] }
 xkbcommon = "0.9"
 # Async runtime for input
 tokio = { version = "1", features = ["rt", "sync", "macros", "time"] }
 async-channel = "2.3"
+# D-Bus client for the XDG Desktop Portal (GlobalShortcuts)
+dbus = "0.9"
 # Error handling
 anyhow = "1.0"
 thiserror = "2.0"

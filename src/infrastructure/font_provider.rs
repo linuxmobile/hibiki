@@ -29,13 +29,6 @@ static SYSTEM_FONTS: Lazy<Result<Arc<Vec<String>>, String>> = Lazy::new(|| {
 pub struct FontProvider;
 
 impl FontProvider {
-    /// Fetch system fonts without blocking the calling thread.
-    /// Returns a sorted list of unique font families.
-    ///
-    /// # Errors
-    ///
-    /// Returns `FontError::DiscoveryFailed` if the underlying font system fails to list families.
-    /// Returns `FontError::ConfigFailed` if the async channel operation fails.
     pub async fn load_system_fonts_asynchronous() -> Result<Arc<Vec<String>>, FontError> {
         tokio::task::spawn_blocking(move || match &*SYSTEM_FONTS {
             Ok(fonts) => Ok(fonts.clone()),
@@ -45,12 +38,6 @@ impl FontProvider {
         .map_err(|_| FontError::ConfigFailed)?
     }
 
-    /// Validate if a font family exists
-    ///
-    /// # Errors
-    ///
-    /// Returns `FontError::FontNotFound` if the specified family is not present in the system.
-    /// Can also return errors from `load_system_fonts_asynchronous`.
     pub async fn validate_font_family(family: String) -> Result<(), FontError> {
         let fonts = Self::load_system_fonts_asynchronous().await?;
         if fonts.binary_search(&family).is_ok() {

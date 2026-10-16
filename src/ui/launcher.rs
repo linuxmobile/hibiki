@@ -12,9 +12,12 @@ const LAUNCHER_CSS: &str = include_str!("../../style/launcher.css");
 const DEFAULTS_CSS: &str = include_str!("../../style/defaults.css");
 
 pub use crate::domain::config::DisplayMode;
+use crate::domain::config::KeystrokeConfig;
+use crate::ui::settings::format_hotkey;
 
 pub fn create_launcher_window(
     app: &Application,
+    config: &KeystrokeConfig,
     on_select: impl Fn(DisplayMode) + 'static,
     on_settings: impl Fn() + 'static,
 ) -> ApplicationWindow {
@@ -22,14 +25,14 @@ pub fn create_launcher_window(
         .application(app)
         .title("Hibiki")
         .default_width(900)
-        .default_height(700)
+        .default_height(780)
         .resizable(false)
         .build();
 
     apply_launcher_css(&window);
     window.add_css_class("launcher-window");
 
-    let content = create_launcher_content(&window, on_select, on_settings);
+    let content = create_launcher_content(&window, config, on_select, on_settings);
     window.set_child(Some(&content));
 
     window
@@ -50,6 +53,7 @@ fn apply_launcher_css(window: &ApplicationWindow) {
 
 fn create_launcher_content(
     window: &ApplicationWindow,
+    config: &KeystrokeConfig,
     on_select: impl Fn(DisplayMode) + 'static,
     on_settings: impl Fn() + 'static,
 ) -> GtkBox {
@@ -218,6 +222,8 @@ fn create_launcher_content(
 
     container.append(&cards_box);
 
+    container.append(&create_keybinds_section(config));
+
     let pref_icon = Image::from_icon_name("emblem-system-symbolic");
     pref_icon.set_pixel_size(16);
 
@@ -246,6 +252,57 @@ fn create_launcher_content(
     container.append(&pref_btn);
 
     container
+}
+
+fn create_keybinds_section(config: &KeystrokeConfig) -> GtkBox {
+    let section = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .halign(Align::Center)
+        .spacing(12)
+        .margin_top(32)
+        .build();
+
+    let title = Label::new(Some("KEYBINDS"));
+    title.add_css_class("keybind-title");
+    title.set_halign(Align::Start);
+    section.append(&title);
+
+    let grid = gtk4::Grid::builder()
+        .column_spacing(24)
+        .row_spacing(10)
+        .halign(Align::Center)
+        .build();
+
+    let bindings = [
+        (
+            config.toggle_mode_hotkey.as_str(),
+            "Toggle keystroke / bubble",
+        ),
+        (config.toggle_focus_hotkey.as_str(), "Toggle focus (Bubble)"),
+        ("Escape", "Lose focus (Bubble)"),
+        (config.keystroke_hotkey.as_str(), "Switch to Keystroke"),
+        (config.bubble.hotkey.as_str(), "Switch to Bubble"),
+        (config.pause_hotkey.as_str(), "Pause / resume capture"),
+    ];
+
+    for (i, (accelerator, description)) in bindings.iter().enumerate() {
+        let col = (i % 2) * 2;
+        let row = i / 2;
+
+        let chip = Label::new(Some(&format_hotkey(accelerator)));
+        chip.add_css_class("keybind-chip");
+        chip.set_halign(Align::Start);
+
+        let desc = Label::new(Some(description));
+        desc.add_css_class("keybind-desc");
+        desc.set_halign(Align::Start);
+
+        grid.attach(&chip, col as i32, row as i32, 1, 1);
+        grid.attach(&desc, (col + 1) as i32, row as i32, 1, 1);
+    }
+
+    section.append(&grid);
+    section
 }
 
 fn create_card<W: IsA<gtk4::Widget>>(
