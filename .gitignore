@@ -3,3 +3,4 @@ result
 .direnv/
 dist/
 .appimage-tools/
+/packaging/arch/hibiki-bin
