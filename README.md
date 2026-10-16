@@ -125,21 +125,31 @@ sudo usermod -aG input "$USER"
 
 ### Arch Linux
 
-`PKGBUILDs` are included under `packaging/arch/`:
+Two mutually-exclusive `PKGBUILDs` are provided under `packaging/arch/` — install
+only one (`hibiki-bin` declares `conflicts=('hibiki')`).
 
-- `packaging/arch/PKGBUILD` — builds from source (`hibiki`).
-- `packaging/arch/hibiki-bin/PKGBUILD` — installs the prebuilt binary
-  (`hibiki-bin`).
-
-Build and install either with:
+**From source (`hibiki`)** — compiles from the release tarball:
 
 ```bash
-cd packaging/arch
+git clone https://github.com/linuxmobile/hibiki
+cd hibiki/packaging/arch
 makepkg -si
 ```
 
-When a new version is released, bump `pkgver` and run `updpkgsums` before
-building. An AUR package is on the way.
+**Prebuilt binary (`hibiki-bin`)** — downloads the matching release binary
+instead of compiling, so it installs in seconds:
+
+```bash
+git clone https://github.com/linuxmobile/hibiki
+cd hibiki/packaging/arch/hibiki-bin
+makepkg -si
+```
+
+Both need the `base-devel` group (`sudo pacman -S --needed base-devel`). With an
+AUR helper, point it at the directory containing the `PKGBUILD` you want.
+
+When a new version is released, bump `pkgver` and run `updpkgsums` in the
+relevant directory before building. An AUR package is on the way.
 
 ### Via Nix
 
