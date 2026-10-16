@@ -148,6 +148,11 @@ makepkg -si
 Both need the `base-devel` group (`sudo pacman -S --needed base-devel`). With an
 AUR helper, point it at the directory containing the `PKGBUILD` you want.
 
+> **Sounds:** the packages include only the packs embedded in the binary; the
+> extra collection in `assets/sounds/` is not installed. See
+> [Extra sound packs](#extra-sound-packs) to add them under
+> `~/.local/share/hibiki/sounds`.
+
 When a new version is released, bump `pkgver` and run `updpkgsums` in the
 relevant directory before building. An AUR package is on the way.
 
@@ -241,6 +246,27 @@ To add more, drop Mechvibes-format pack folders into
 load packs from any other directory. A pack is a folder containing a
 `config.json` plus its audio files (`wav`/`ogg`); the info button in that tab
 has the details. Packs found in a folder override built-ins with the same name.
+
+#### Extra sound packs
+
+The repository ships a larger collection of ready-to-use Mechvibes packs
+(~15 MB) under
+[`assets/sounds/`](https://github.com/linuxmobile/hibiki/tree/main/assets/sounds)
+— e.g. `opera-gx-typing-sounds`, `banana split`, `Gateron Browns - Revolt`,
+`mx-speed-silver`, `topre-purple-hybrid-pbt`, and more. They are **not** built
+into the binary and are **not** installed by the Arch packages, so copy them
+into your user sounds folder (or point **Settings → Sounds → Choose folder…**
+at `assets/sounds`):
+
+```bash
+git clone --depth 1 https://github.com/linuxmobile/hibiki
+mkdir -p ~/.local/share/hibiki/sounds
+cp -r hibiki/assets/sounds/* ~/.local/share/hibiki/sounds/
+```
+
+System-wide packs are also picked up from `/usr/share/hibiki/sounds` and
+`/usr/local/share/hibiki/sounds`, and the `HIBIKI_SOUNDS_DIR` environment
+variable can point at any extra folder.
 
 Flip sound and visual on/off at runtime with `hibiki --sound-toggle` and
 `hibiki --visual-toggle`, or from the **Settings → Sounds** tab.
