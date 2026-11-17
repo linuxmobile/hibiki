@@ -292,12 +292,29 @@ hibiki --daemon             # start detached in the background (-d)
 All commands are forwarded to an already-running instance over D-Bus; if none
 is running, the first command also starts Hibiki. This makes them ideal for
 compositor keybindings. The commands are silent by default; add `--verbose`
-(`-v`) or set `RUST_LOG` to see logs. For example, on Hyprland:
+(`-v`) or set `RUST_LOG` to see logs. For example, on Hyprland (`hyprland.lua`):
 
-```ini
-bind = SUPER, K, exec, hibiki --keystroke-toggle
-bind = SUPER, B, exec, hibiki --bubble-toggle
-bind = SUPER, P, exec, hibiki --pause-toggle
+```lua
+hl.bind("SUPER + K", hl.dsp.exec_cmd("hibiki --keystroke-toggle"))
+hl.bind("SUPER + B", hl.dsp.exec_cmd("hibiki --bubble-toggle"))
+hl.bind("SUPER + P", hl.dsp.exec_cmd("hibiki --pause-toggle"))
+```
+
+Or using a dedicated [submap](https://wiki.hypr.land/configuring/core/binds/submaps/):
+
+```lua
+-- Enter Hibiki submap with SUPER + H
+hl.bind("SUPER + H", hl.dsp.submap("hibiki"))
+
+hl.define_submap("hibiki", function()
+    hl.bind("K", hl.dsp.exec_cmd("hibiki --keystroke-toggle"))
+    hl.bind("B", hl.dsp.exec_cmd("hibiki --bubble-toggle"))
+    hl.bind("P", hl.dsp.exec_cmd("hibiki --pause-toggle"))
+    hl.bind("S", hl.dsp.exec_cmd("hibiki --sound-toggle"))
+
+    -- Reset back to global submap
+    hl.bind("escape", hl.dsp.submap("reset"))
+end)
 ```
 
 ### In-app global hotkeys

@@ -33,10 +33,10 @@ All control options are forwarded to an already-running instance, so they can
 be bound to compositor shortcuts. Use `hibiki --daemon` to start Hibiki
 silently in the background.
 
-    bind = SUPER, K, exec, hibiki --keystroke-toggle
-    bind = SUPER, B, exec, hibiki --bubble-toggle
-    bind = SUPER, P, exec, hibiki --pause-toggle
-    bind = SUPER, S, exec, hibiki --sound-toggle
+    hl.bind("SUPER + K", hl.dsp.exec_cmd("hibiki --keystroke-toggle"))
+    hl.bind("SUPER + B", hl.dsp.exec_cmd("hibiki --bubble-toggle"))
+    hl.bind("SUPER + P", hl.dsp.exec_cmd("hibiki --pause-toggle"))
+    hl.bind("SUPER + S", hl.dsp.exec_cmd("hibiki --sound-toggle"))
 ";
 
 fn main() -> Result<()> {
